@@ -1,4 +1,3 @@
-import os
 import html
 import json
 import math
@@ -29,19 +28,8 @@ TZ_BR = ZoneInfo("America/Sao_Paulo")
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 OPENLIGADB_BASE = "https://api.openligadb.de"
 
-DEFAULT_USER = "admin"
-DEFAULT_PASSWORD = "troque-esta-senha"
-
-
-def get_secret(name, default=""):
-    try:
-        return st.secrets.get(name, default)
-    except Exception:
-        return os.getenv(name, default)
-
-
-APP_USER = get_secret("APP_USER", DEFAULT_USER)
-APP_PASSWORD = get_secret("APP_PASSWORD", DEFAULT_PASSWORD)
+APP_USER = "Aposta"
+APP_PASSWORD = "12345678senha"
 
 
 # ============================================================
@@ -328,11 +316,6 @@ def check_login():
 
     st.title("🔐 Login")
     st.info("Entre para acessar o analisador.")
-
-    if APP_PASSWORD == DEFAULT_PASSWORD:
-        st.warning(
-            "Senha padrão detectada. Antes de publicar online, configure APP_USER e APP_PASSWORD em st.secrets."
-        )
 
     user = st.text_input("Usuário", placeholder="Usuário")
     password = st.text_input("Senha", type="password", placeholder="Senha")
