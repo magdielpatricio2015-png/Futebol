@@ -1,3 +1,29 @@
+import streamlit as st
+
+# ===== LOGIN SIMPLES =====
+USUARIO = "admin"
+SENHA = "1234"
+
+def check_login():
+    if "logado" not in st.session_state:
+        st.session_state.logado = False
+
+    if not st.session_state.logado:
+        st.title("🔐 Login necessário")
+
+        user = st.text_input("Usuário")
+        password = st.text_input("Senha", type="password")
+
+        if st.button("Entrar"):
+            if user == USUARIO and password == SENHA:
+                st.session_state.logado = True
+                st.rerun()
+            else:
+                st.error("Usuário ou senha incorretos")
+
+        st.stop()
+
+check_login()
 import json
 import math
 import os
