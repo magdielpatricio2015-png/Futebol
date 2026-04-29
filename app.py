@@ -2,7 +2,7 @@ import streamlit as st
 
 # ===== LOGIN SIMPLES =====
 USUARIO = "admin"
-SENHA = "1234"
+SENHA = "12354"
 
 def check_login():
     if "logado" not in st.session_state:
