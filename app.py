@@ -40,18 +40,44 @@ st.markdown(
     """
     <style>
         .main .block-container {
-            padding-top: 1rem;
-            padding-left: 0.75rem;
-            padding-right: 0.75rem;
+            padding-top: 0.85rem;
+            padding-left: 0.7rem;
+            padding-right: 0.7rem;
             max-width: 1180px;
         }
 
+        h1 {
+            font-size: 1.7rem !important;
+            margin-bottom: 0.4rem !important;
+        }
+
+        h2, h3 {
+            margin-top: 0.5rem !important;
+        }
+
+        div[data-testid="stMetric"] {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 10px;
+            box-shadow: 0 1px 6px rgba(15, 23, 42, 0.04);
+        }
+
         div[data-testid="stMetricValue"] {
-            font-size: 1.25rem;
+            font-size: 1.18rem;
         }
 
         div[data-testid="stMetricLabel"] {
-            font-size: 0.82rem;
+            font-size: 0.78rem;
+        }
+
+        .top-box {
+            border: 1px solid #dbeafe;
+            background: #eff6ff;
+            color: #0f172a;
+            border-radius: 14px;
+            padding: 12px;
+            margin-bottom: 12px;
         }
 
         .match-card {
@@ -64,7 +90,7 @@ st.markdown(
         }
 
         .match-title {
-            font-size: 1.03rem;
+            font-size: 1.02rem;
             font-weight: 800;
             color: #0f172a;
             margin-top: 6px;
@@ -104,6 +130,16 @@ st.markdown(
             color: #92400e;
         }
 
+        .pill-ok {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .pill-bad {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
         .source {
             display: inline-block;
             padding: 2px 7px;
@@ -123,19 +159,51 @@ st.markdown(
             margin-bottom: 12px;
         }
 
+        .diag-card {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            padding: 12px;
+            margin-bottom: 10px;
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+        }
+
+        .diag-title {
+            font-weight: 800;
+            color: #0f172a;
+            font-size: 0.98rem;
+            line-height: 1.25;
+            margin-top: 5px;
+        }
+
         @media (max-width: 640px) {
             .main .block-container {
-                padding-left: 0.5rem;
-                padding-right: 0.5rem;
+                padding-left: 0.45rem;
+                padding-right: 0.45rem;
             }
 
-            .match-card {
-                padding: 11px;
+            h1 {
+                font-size: 1.35rem !important;
+            }
+
+            .match-card,
+            .diag-card,
+            .top-box {
+                padding: 10px;
                 border-radius: 12px;
             }
 
-            .match-title {
-                font-size: 0.98rem;
+            .match-title,
+            .diag-title {
+                font-size: 0.95rem;
+            }
+
+            div[data-testid="stMetric"] {
+                padding: 8px;
+            }
+
+            div[data-testid="stMetricValue"] {
+                font-size: 1rem;
             }
         }
     </style>
@@ -303,6 +371,15 @@ def poisson_pmf(k, lam):
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
 
 
+def parse_data_hora_br(jogo):
+    try:
+        data = jogo.get("data") or ""
+        hora = jogo.get("hora") or "00:00"
+        return datetime.strptime(f"{data} {hora}", "%Y-%m-%d %H:%M").replace(tzinfo=TZ_BR)
+    except Exception:
+        return None
+
+
 # ============================================================
 # LOGIN
 # ============================================================
@@ -337,7 +414,7 @@ def check_login():
 
 def abrir_json(url, timeout=15):
     headers = {
-        "User-Agent": "Mozilla/5.0 AnalisadorFutebolStreamlit/2.0",
+        "User-Agent": "Mozilla/5.0 AnalisadorFutebolStreamlit/2.1",
         "Accept": "application/json,text/plain,*/*",
         "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
     }
@@ -446,6 +523,31 @@ def buscar_jogos_espn_periodo(slug, dias=3):
             continue
 
         todos.extend(extrair_jogos_espn(data))
+
+    return deduplicar_jogos(todos), logs
+
+
+def buscar_jogos_espn_ultimas_48h(slug):
+    todos = []
+    logs = []
+    agora = br_now()
+    inicio = agora - timedelta(hours=48)
+
+    for offset in range(-2, 1):
+        d = br_today() + timedelta(days=offset)
+        data_key = d.strftime("%Y%m%d")
+        data, erro = buscar_espn_scoreboard(slug, data_key)
+
+        if erro:
+            logs.append(f"{d.strftime('%d/%m')}: {erro}")
+            continue
+
+        for jogo in extrair_jogos_espn(data):
+            dt = parse_data_hora_br(jogo)
+            if not dt:
+                continue
+            if inicio <= dt <= agora and str(jogo.get("status_state", "")).lower() == "post":
+                todos.append(jogo)
 
     return deduplicar_jogos(todos), logs
 
@@ -583,6 +685,30 @@ def buscar_jogos_openligadb_periodo(config_openliga, dias=7):
                 filtrados.append(j)
         except Exception:
             pass
+
+    return filtrados, ""
+
+
+def buscar_jogos_openligadb_ultimas_48h(config_openliga):
+    if not config_openliga:
+        return [], "OpenLigaDB não configurada para esta competição."
+
+    matches = openligadb_get_matches(
+        config_openliga["league"],
+        config_openliga["season"],
+    )
+
+    jogos = processar_openligadb_matches(matches)
+    agora = br_now()
+    inicio = agora - timedelta(hours=48)
+
+    filtrados = []
+    for j in jogos:
+        dt = parse_data_hora_br(j)
+        if not dt:
+            continue
+        if inicio <= dt <= agora and str(j.get("status_state", "")).lower() == "post":
+            filtrados.append(j)
 
     return filtrados, ""
 
@@ -753,6 +879,84 @@ def calcular_probabilidades(casa, fora, campo_neutro=False):
         "favorito": favorito,
         "prob_favorito": prob_favorito,
     }
+
+
+# ============================================================
+# DIAGNÓSTICO DE ACERTOS E ERROS
+# ============================================================
+
+def resultado_real(jogo):
+    pc = jogo.get("placar_casa")
+    pf = jogo.get("placar_fora")
+
+    if pc is None or pf is None:
+        return None
+
+    try:
+        pc = int(pc)
+        pf = int(pf)
+    except Exception:
+        return None
+
+    if pc > pf:
+        return "casa"
+    if pf > pc:
+        return "fora"
+    return "empate"
+
+
+def palpite_resultado(r):
+    if r["p_casa"] >= r["p_empate"] and r["p_casa"] >= r["p_fora"]:
+        return "casa", r["casa"], r["p_casa"]
+    if r["p_fora"] >= r["p_casa"] and r["p_fora"] >= r["p_empate"]:
+        return "fora", r["fora"], r["p_fora"]
+    return "empate", "Empate", r["p_empate"]
+
+
+def diagnosticar_jogo(jogo):
+    r = calcular_probabilidades(jogo.get("casa", ""), jogo.get("fora", ""))
+    real = resultado_real(jogo)
+
+    if real is None:
+        return None
+
+    palpite_key, palpite_label, prob = palpite_resultado(r)
+    acertou_resultado = palpite_key == real
+
+    pc = int(jogo.get("placar_casa"))
+    pf = int(jogo.get("placar_fora"))
+    total_gols = pc + pf
+    ambas = pc > 0 and pf > 0
+
+    palpite_over_15 = r["over_15"] >= 0.55
+    palpite_over_25 = r["over_25"] >= 0.55
+    palpite_ambas = r["ambas_marcam"] >= 0.55
+
+    return {
+        "jogo": jogo,
+        "modelo": r,
+        "real": real,
+        "palpite_key": palpite_key,
+        "palpite_label": palpite_label,
+        "prob": prob,
+        "acertou_resultado": acertou_resultado,
+        "placar": f"{pc} x {pf}",
+        "total_gols": total_gols,
+        "acertou_over_15": palpite_over_15 == (total_gols >= 2),
+        "acertou_over_25": palpite_over_25 == (total_gols >= 3),
+        "acertou_ambas": palpite_ambas == ambas,
+        "palpite_over_15": palpite_over_15,
+        "palpite_over_25": palpite_over_25,
+        "palpite_ambas": palpite_ambas,
+    }
+
+
+def classe_diagnostico(acertou):
+    return "pill pill-ok" if acertou else "pill pill-bad"
+
+
+def texto_diagnostico(acertou):
+    return "ACERTO" if acertou else "ERRO"
 
 
 # ============================================================
@@ -960,6 +1164,54 @@ def mostrar_analise_partida(casa, fora, config_openliga):
     )
 
 
+def mostrar_diagnostico_card(item):
+    jogo = item["jogo"]
+    classe = classe_diagnostico(item["acertou_resultado"])
+    texto = texto_diagnostico(item["acertou_resultado"])
+
+    data = fmt_data(jogo.get("data"))
+    hora = jogo.get("hora") or "--:--"
+    fonte = jogo.get("source", "Fonte")
+
+    real_label = {
+        "casa": jogo.get("casa"),
+        "fora": jogo.get("fora"),
+        "empate": "Empate",
+    }.get(item["real"], "-")
+
+    st.markdown(
+        f"""
+        <div class="diag-card">
+            <span class="{classe}">{esc(texto)}</span>
+            <span class="source">{esc(fonte)}</span>
+            <span class="muted">{esc(data)} • {esc(hora)}</span>
+            <div class="diag-title">{esc(jogo.get("casa"))} {esc(item["placar"])} {esc(jogo.get("fora"))}</div>
+            <div class="muted">
+                Palpite principal: <b>{esc(item["palpite_label"])}</b> ({esc(pct(item["prob"]))}) •
+                Resultado real: <b>{esc(real_label)}</b>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("Ver detalhes do diagnóstico"):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Resultado", "Acertou" if item["acertou_resultado"] else "Errou")
+        c2.metric("+1.5 gols", "Acertou" if item["acertou_over_15"] else "Errou")
+        c3.metric("+2.5 gols", "Acertou" if item["acertou_over_25"] else "Errou")
+
+        c4, c5 = st.columns(2)
+        c4.metric("Ambas marcam", "Acertou" if item["acertou_ambas"] else "Errou")
+        c5.metric("Total de gols real", item["total_gols"])
+
+        st.caption(
+            f"Modelo: {pct(item['modelo']['p_casa'])} casa • "
+            f"{pct(item['modelo']['p_empate'])} empate • "
+            f"{pct(item['modelo']['p_fora'])} fora"
+        )
+
+
 # ============================================================
 # APP
 # ============================================================
@@ -1008,75 +1260,171 @@ with st.sidebar:
 config = COMPETICOES[competicao_nome]
 config_openliga = config.get("openligadb") if buscar_openliga else None
 
-col1, col2 = st.columns([2, 1])
+st.markdown(
+    f"""
+    <div class="top-box">
+        <b>{esc(competicao_nome)}</b><br>
+        <span class="muted">Atualizado em {esc(br_now().strftime('%d/%m/%Y %H:%M'))}</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-with col1:
-    st.subheader(competicao_nome)
+aba_jogos, aba_diagnostico = st.tabs(
+    ["Jogos e análises", "Diagnóstico 48h"]
+)
 
-with col2:
-    st.caption(f"Atualizado em {br_now().strftime('%d/%m/%Y %H:%M')}")
 
-with st.spinner("Buscando jogos..."):
-    jogos_espn, logs_espn = buscar_jogos_espn_periodo(config["espn"], dias=dias_busca)
+# ============================================================
+# ABA JOGOS
+# ============================================================
 
-    jogos_openliga = []
-    erro_openliga = ""
+with aba_jogos:
+    with st.spinner("Buscando jogos..."):
+        jogos_espn, logs_espn = buscar_jogos_espn_periodo(config["espn"], dias=dias_busca)
+
+        jogos_openliga = []
+        erro_openliga = ""
+
+        if config_openliga:
+            jogos_openliga, erro_openliga = buscar_jogos_openligadb_periodo(
+                config_openliga,
+                dias=dias_busca,
+            )
+
+        jogos = combinar_fontes(jogos_espn, jogos_openliga)
+        jogos_filtrados = filtrar_jogos(jogos, filtro_periodo)
+
+    total = len(jogos_filtrados)
+    ao_vivo = sum(1 for j in jogos_filtrados if str(j.get("status_state", "")).lower() == "in")
+    fontes = sorted(set(j.get("source", "Fonte") for j in jogos_filtrados))
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Jogos exibidos", total)
+    m2.metric("Ao vivo", ao_vivo)
+    m3.metric("Fontes", ", ".join(fontes) if fontes else "-")
 
     if config_openliga:
-        jogos_openliga, erro_openliga = buscar_jogos_openligadb_periodo(
-            config_openliga,
-            dias=dias_busca,
+        st.success(
+            f"OpenLigaDB ativa: {config_openliga['league']} / {config_openliga['season']}."
+        )
+    else:
+        st.info(
+            "OpenLigaDB não está configurada para esta competição. A ESPN será usada como fonte principal."
         )
 
-    jogos = combinar_fontes(jogos_espn, jogos_openliga)
-    jogos_filtrados = filtrar_jogos(jogos, filtro_periodo)
+    if logs_espn:
+        with st.expander("Avisos da ESPN"):
+            for log in logs_espn[:8]:
+                st.write(log)
 
-total = len(jogos_filtrados)
-ao_vivo = sum(1 for j in jogos_filtrados if str(j.get("status_state", "")).lower() == "in")
-fontes = sorted(set(j.get("source", "Fonte") for j in jogos_filtrados))
+    if erro_openliga:
+        st.caption(erro_openliga)
 
-m1, m2, m3 = st.columns(3)
-m1.metric("Jogos exibidos", total)
-m2.metric("Ao vivo", ao_vivo)
-m3.metric("Fontes", ", ".join(fontes) if fontes else "-")
-
-if config_openliga:
-    st.success(
-        f"OpenLigaDB ativa para esta competição: {config_openliga['league']} / {config_openliga['season']}."
-    )
-else:
-    st.info(
-        "OpenLigaDB não está configurada para esta competição. A ESPN será usada como fonte principal."
-    )
-
-if logs_espn:
-    with st.expander("Avisos da ESPN"):
-        for log in logs_espn[:8]:
-            st.write(log)
-
-if erro_openliga:
-    st.caption(erro_openliga)
-
-st.divider()
-
-if not jogos_filtrados:
-    st.warning("Nenhum jogo encontrado para os filtros selecionados.")
-else:
-    busca = st.text_input(
-        "Buscar time",
-        placeholder="Digite parte do nome do time",
-    ).strip().lower()
-
-    if busca:
-        jogos_filtrados = [
-            j
-            for j in jogos_filtrados
-            if busca in normalizar_nome(j.get("casa")).lower()
-            or busca in normalizar_nome(j.get("fora")).lower()
-        ]
+    st.divider()
 
     if not jogos_filtrados:
-        st.warning("Nenhum jogo encontrado para esse time.")
+        st.warning("Nenhum jogo encontrado para os filtros selecionados.")
     else:
-        for jogo in jogos_filtrados:
-            mostrar_jogo_card(jogo, config_openliga)
+        busca = st.text_input(
+            "Buscar time",
+            placeholder="Digite parte do nome do time",
+        ).strip().lower()
+
+        if busca:
+            jogos_filtrados = [
+                j
+                for j in jogos_filtrados
+                if busca in normalizar_nome(j.get("casa")).lower()
+                or busca in normalizar_nome(j.get("fora")).lower()
+            ]
+
+        if not jogos_filtrados:
+            st.warning("Nenhum jogo encontrado para esse time.")
+        else:
+            for jogo in jogos_filtrados:
+                mostrar_jogo_card(jogo, config_openliga)
+
+
+# ============================================================
+# ABA DIAGNÓSTICO
+# ============================================================
+
+with aba_diagnostico:
+    st.subheader("Diagnóstico das últimas 48 horas")
+
+    st.caption(
+        "Compara o palpite matemático principal com os jogos encerrados nas últimas 48 horas."
+    )
+
+    with st.spinner("Buscando jogos encerrados..."):
+        diag_espn, logs_diag_espn = buscar_jogos_espn_ultimas_48h(config["espn"])
+
+        diag_openliga = []
+        erro_diag_openliga = ""
+
+        if config_openliga:
+            diag_openliga, erro_diag_openliga = buscar_jogos_openligadb_ultimas_48h(config_openliga)
+
+        jogos_diag = combinar_fontes(diag_espn, diag_openliga)
+        diagnosticos = []
+
+        for jogo in jogos_diag:
+            item = diagnosticar_jogo(jogo)
+            if item:
+                diagnosticos.append(item)
+
+    total_diag = len(diagnosticos)
+    acertos_resultado = sum(1 for d in diagnosticos if d["acertou_resultado"])
+    erros_resultado = total_diag - acertos_resultado
+
+    acertos_over15 = sum(1 for d in diagnosticos if d["acertou_over_15"])
+    acertos_over25 = sum(1 for d in diagnosticos if d["acertou_over_25"])
+    acertos_ambas = sum(1 for d in diagnosticos if d["acertou_ambas"])
+
+    taxa_resultado = (acertos_resultado / total_diag) if total_diag else 0
+    taxa_over15 = (acertos_over15 / total_diag) if total_diag else 0
+    taxa_over25 = (acertos_over25 / total_diag) if total_diag else 0
+    taxa_ambas = (acertos_ambas / total_diag) if total_diag else 0
+
+    d1, d2, d3 = st.columns(3)
+    d1.metric("Jogos avaliados", total_diag)
+    d2.metric("Acertos resultado", acertos_resultado, pct(taxa_resultado) if total_diag else "-")
+    d3.metric("Erros resultado", erros_resultado)
+
+    d4, d5, d6 = st.columns(3)
+    d4.metric("Acerto +1.5 gols", pct(taxa_over15) if total_diag else "-")
+    d5.metric("Acerto +2.5 gols", pct(taxa_over25) if total_diag else "-")
+    d6.metric("Acerto ambas marcam", pct(taxa_ambas) if total_diag else "-")
+
+    if logs_diag_espn:
+        with st.expander("Avisos da ESPN no diagnóstico"):
+            for log in logs_diag_espn[:8]:
+                st.write(log)
+
+    if erro_diag_openliga:
+        st.caption(erro_diag_openliga)
+
+    st.divider()
+
+    if not diagnosticos:
+        st.warning("Nenhum jogo encerrado encontrado nas últimas 48 horas para esta competição.")
+    else:
+        filtro_diag = st.radio(
+            "Mostrar",
+            ["Todos", "Só acertos", "Só erros"],
+            horizontal=True,
+        )
+
+        filtrados_diag = diagnosticos
+        if filtro_diag == "Só acertos":
+            filtrados_diag = [d for d in diagnosticos if d["acertou_resultado"]]
+        elif filtro_diag == "Só erros":
+            filtrados_diag = [d for d in diagnosticos if not d["acertou_resultado"]]
+
+        for item in filtrados_diag:
+            mostrar_diagnostico_card(item)
+
+    st.warning(
+        "O diagnóstico mede apenas se o modelo acertou a tendência matemática. Não representa recomendação de aposta nem garantia futura."
+    )
