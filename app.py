@@ -217,50 +217,20 @@ st.markdown(
 # ============================================================
 
 COMPETICOES = {
-    "Brasileirão Série A": {
-        "espn": "bra.1",
-        "openligadb": None,
-        "tipo": "liga",
-    },
-    "Brasileirão Série B": {
-        "espn": "bra.2",
-        "openligadb": None,
-        "tipo": "liga",
-    },
-    "Copa do Brasil": {
-        "espn": "bra.copa_do_brasil",
-        "openligadb": None,
-        "tipo": "copa",
-    },
-    "Libertadores": {
-        "espn": "conmebol.libertadores",
-        "openligadb": None,
-        "tipo": "copa",
-    },
-    "Premier League": {
-        "espn": "eng.1",
-        "openligadb": None,
-        "tipo": "liga",
-    },
-    "La Liga": {
-        "espn": "esp.1",
-        "openligadb": None,
-        "tipo": "liga",
-    },
+    "Brasileirão Série A": {"espn": "bra.1", "openligadb": None, "tipo": "liga"},
+    "Brasileirão Série B": {"espn": "bra.2", "openligadb": None, "tipo": "liga"},
+    "Copa do Brasil": {"espn": "bra.copa_do_brasil", "openligadb": None, "tipo": "copa"},
+    "Libertadores": {"espn": "conmebol.libertadores", "openligadb": None, "tipo": "copa"},
+    "Premier League": {"espn": "eng.1", "openligadb": None, "tipo": "liga"},
+    "La Liga": {"espn": "esp.1", "openligadb": None, "tipo": "liga"},
     "Bundesliga": {
         "espn": "ger.1",
-        "openligadb": {
-            "league": "bl1",
-            "season": "2025",
-        },
+        "openligadb": {"league": "bl1", "season": "2025"},
         "tipo": "liga",
     },
     "2. Bundesliga": {
         "espn": "ger.2",
-        "openligadb": {
-            "league": "bl2",
-            "season": "2025",
-        },
+        "openligadb": {"league": "bl2", "season": "2025"},
         "tipo": "liga",
     },
 }
@@ -365,6 +335,12 @@ def hash_forca_time(nome):
     return 64 + (n % 15)
 
 
+def forca_inicial_elo(nome):
+    """Converte a forca antiga em ponto de partida Elo, sem deixar ela mandar sozinha."""
+    forca = hash_forca_time(nome)
+    return 1500 + (forca - 72) * 8
+
+
 def poisson_pmf(k, lam):
     if lam <= 0:
         return 0
@@ -414,7 +390,7 @@ def check_login():
 
 def abrir_json(url, timeout=15):
     headers = {
-        "User-Agent": "Mozilla/5.0 AnalisadorFutebolStreamlit/2.1",
+        "User-Agent": "Mozilla/5.0 AnalisadorFutebolStreamlit/2.2",
         "Accept": "application/json,text/plain,*/*",
         "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
     }
@@ -463,12 +439,7 @@ def extrair_jogos_espn(data):
 
         for c in comp.get("competitors", []):
             team = c.get("team") or {}
-            nome = (
-                team.get("displayName")
-                or team.get("shortDisplayName")
-                or team.get("name")
-                or "Time"
-            )
+            nome = team.get("displayName") or team.get("shortDisplayName") or team.get("name") or "Time"
 
             score = c.get("score")
             if score is not None:
@@ -552,6 +523,29 @@ def buscar_jogos_espn_ultimas_48h(slug):
     return deduplicar_jogos(todos), logs
 
 
+def buscar_jogos_espn_historico(slug, dias=30):
+    todos = []
+    logs = []
+    hoje = br_today()
+
+    for offset in range(-dias, 1):
+        d = hoje + timedelta(days=offset)
+        data_key = d.strftime("%Y%m%d")
+        data, erro = buscar_espn_scoreboard(slug, data_key)
+
+        if erro:
+            if offset >= -3:
+                logs.append(f"{d.strftime('%d/%m')}: {erro}")
+            continue
+
+        for jogo in extrair_jogos_espn(data):
+            if str(jogo.get("status_state", "")).lower() == "post":
+                if jogo.get("placar_casa") is not None and jogo.get("placar_fora") is not None:
+                    todos.append(jogo)
+
+    return deduplicar_jogos(todos), logs
+
+
 # ============================================================
 # OPENLIGADB
 # ============================================================
@@ -596,11 +590,7 @@ def extrair_placar_openligadb(match):
             if r.get("resultName") == nome:
                 return r.get("pointsTeam1"), r.get("pointsTeam2")
 
-    ordenados = sorted(
-        resultados,
-        key=lambda r: r.get("resultOrderID") or 0,
-        reverse=True,
-    )
+    ordenados = sorted(resultados, key=lambda r: r.get("resultOrderID") or 0, reverse=True)
     r = ordenados[0]
     return r.get("pointsTeam1"), r.get("pointsTeam2")
 
@@ -668,11 +658,7 @@ def buscar_jogos_openligadb_periodo(config_openliga, dias=7):
     if not config_openliga:
         return [], "OpenLigaDB não configurada para esta competição."
 
-    matches = openligadb_get_matches(
-        config_openliga["league"],
-        config_openliga["season"],
-    )
-
+    matches = openligadb_get_matches(config_openliga["league"], config_openliga["season"])
     jogos = processar_openligadb_matches(matches)
     hoje = br_today()
     limite = hoje + timedelta(days=dias)
@@ -693,11 +679,7 @@ def buscar_jogos_openligadb_ultimas_48h(config_openliga):
     if not config_openliga:
         return [], "OpenLigaDB não configurada para esta competição."
 
-    matches = openligadb_get_matches(
-        config_openliga["league"],
-        config_openliga["season"],
-    )
-
+    matches = openligadb_get_matches(config_openliga["league"], config_openliga["season"])
     jogos = processar_openligadb_matches(matches)
     agora = br_now()
     inicio = agora - timedelta(hours=48)
@@ -709,6 +691,27 @@ def buscar_jogos_openligadb_ultimas_48h(config_openliga):
             continue
         if inicio <= dt <= agora and str(j.get("status_state", "")).lower() == "post":
             filtrados.append(j)
+
+    return filtrados, ""
+
+
+def buscar_jogos_openligadb_historico(config_openliga, dias=120):
+    if not config_openliga:
+        return [], "OpenLigaDB não configurada para esta competição."
+
+    matches = openligadb_get_matches(config_openliga["league"], config_openliga["season"])
+    jogos = processar_openligadb_matches(matches)
+    agora = br_now()
+    inicio = agora - timedelta(days=dias)
+
+    filtrados = []
+    for j in jogos:
+        dt = parse_data_hora_br(j)
+        if not dt:
+            continue
+        if inicio <= dt <= agora and str(j.get("status_state", "")).lower() == "post":
+            if j.get("placar_casa") is not None and j.get("placar_fora") is not None:
+                filtrados.append(j)
 
     return filtrados, ""
 
@@ -748,16 +751,12 @@ def combinar_fontes(jogos_espn, jogos_openliga):
     for j in jogos_espn:
         por_chave[chave_jogo(j)] = j
 
-    return sorted(
-        por_chave.values(),
-        key=lambda x: (x.get("data", ""), x.get("hora", "")),
-    )
+    return sorted(por_chave.values(), key=lambda x: (x.get("data", ""), x.get("hora", "")))
 
 
 def filtrar_jogos(jogos, filtro):
     hoje = br_today()
     amanha = hoje + timedelta(days=1)
-
     filtrados = []
 
     for j in jogos:
@@ -787,20 +786,188 @@ def filtrar_jogos(jogos, filtro):
 # MODELO MATEMÁTICO
 # ============================================================
 
+def _novo_time_stats():
+    return {
+        "jogos": 0,
+        "gf": 0,
+        "ga": 0,
+        "home_jogos": 0,
+        "home_gf": 0,
+        "home_ga": 0,
+        "away_jogos": 0,
+        "away_gf": 0,
+        "away_ga": 0,
+        "recent_points": [],
+        "recent_gd": [],
+    }
+
+
+def _media_suavizada(valor, jogos, media_liga, peso_liga=4):
+    if jogos <= 0:
+        return media_liga
+    return ((valor / jogos) * jogos + media_liga * peso_liga) / (jogos + peso_liga)
+
+
+def construir_modelo_contexto(jogos_historicos):
+    jogos_validos = []
+    for j in jogos_historicos or []:
+        if j.get("placar_casa") is None or j.get("placar_fora") is None:
+            continue
+        dt = parse_data_hora_br(j)
+        if not dt:
+            continue
+        jogos_validos.append((dt, j))
+
+    jogos_validos.sort(key=lambda x: x[0])
+
+    ratings = {}
+    stats = {}
+    total_home_goals = 0
+    total_away_goals = 0
+    total_matches = 0
+    home_adv_elo = 60
+    k_base = 24
+
+    for _, jogo in jogos_validos:
+        casa = normalizar_nome(jogo.get("casa"))
+        fora = normalizar_nome(jogo.get("fora"))
+
+        if not casa or not fora:
+            continue
+
+        pc = int(jogo.get("placar_casa"))
+        pf = int(jogo.get("placar_fora"))
+
+        ratings.setdefault(casa, forca_inicial_elo(casa))
+        ratings.setdefault(fora, forca_inicial_elo(fora))
+        stats.setdefault(casa, _novo_time_stats())
+        stats.setdefault(fora, _novo_time_stats())
+
+        total_home_goals += pc
+        total_away_goals += pf
+        total_matches += 1
+
+        sc = stats[casa]
+        sf = stats[fora]
+
+        sc["jogos"] += 1
+        sc["gf"] += pc
+        sc["ga"] += pf
+        sc["home_jogos"] += 1
+        sc["home_gf"] += pc
+        sc["home_ga"] += pf
+
+        sf["jogos"] += 1
+        sf["gf"] += pf
+        sf["ga"] += pc
+        sf["away_jogos"] += 1
+        sf["away_gf"] += pf
+        sf["away_ga"] += pc
+
+        if pc > pf:
+            res_casa = 1.0
+            pontos_casa = 3
+            pontos_fora = 0
+        elif pc < pf:
+            res_casa = 0.0
+            pontos_casa = 0
+            pontos_fora = 3
+        else:
+            res_casa = 0.5
+            pontos_casa = 1
+            pontos_fora = 1
+
+        expected_home = 1 / (1 + 10 ** ((ratings[fora] - (ratings[casa] + home_adv_elo)) / 400))
+        margin = max(1, abs(pc - pf))
+        mov = min(1.8, 1 + math.log(margin) * 0.35)
+        delta = k_base * mov * (res_casa - expected_home)
+
+        ratings[casa] += delta
+        ratings[fora] -= delta
+
+        sc["recent_points"].append(pontos_casa)
+        sc["recent_gd"].append(pc - pf)
+        sf["recent_points"].append(pontos_fora)
+        sf["recent_gd"].append(pf - pc)
+
+        sc["recent_points"] = sc["recent_points"][-5:]
+        sc["recent_gd"] = sc["recent_gd"][-5:]
+        sf["recent_points"] = sf["recent_points"][-5:]
+        sf["recent_gd"] = sf["recent_gd"][-5:]
+
+    liga_home = total_home_goals / total_matches if total_matches else 1.35
+    liga_away = total_away_goals / total_matches if total_matches else 1.08
+
+    return {
+        "ratings": ratings,
+        "stats": stats,
+        "jogos": total_matches,
+        "liga_home_gols": max(0.8, min(2.2, liga_home)),
+        "liga_away_gols": max(0.6, min(1.8, liga_away)),
+        "home_adv_elo": home_adv_elo,
+    }
+
+
+def modelo_contexto_atual():
+    try:
+        return st.session_state.get("modelo_contexto")
+    except Exception:
+        return None
+
+
 def calcular_probabilidades(casa, fora, campo_neutro=False):
     casa = normalizar_nome(casa)
     fora = normalizar_nome(fora)
 
-    forca_casa = hash_forca_time(casa)
-    forca_fora = hash_forca_time(fora)
+    contexto = modelo_contexto_atual() or {}
+    ratings = contexto.get("ratings") or {}
+    stats = contexto.get("stats") or {}
+    jogos_modelo = contexto.get("jogos", 0)
 
-    vantagem_casa = 0 if campo_neutro else 4
-    rating_casa = forca_casa + vantagem_casa
-    rating_fora = forca_fora
-    diferenca = rating_casa - rating_fora
+    elo_casa = ratings.get(casa, forca_inicial_elo(casa))
+    elo_fora = ratings.get(fora, forca_inicial_elo(fora))
+    home_adv_elo = 0 if campo_neutro else contexto.get("home_adv_elo", 60)
+    diferenca_elo = (elo_casa + home_adv_elo) - elo_fora
 
-    gols_casa = max(0.45, min(3.2, 1.35 + diferenca * 0.025))
-    gols_fora = max(0.35, min(3.0, 1.08 - diferenca * 0.020))
+    liga_home = contexto.get("liga_home_gols", 1.35)
+    liga_away = contexto.get("liga_away_gols", 1.08)
+
+    sc = stats.get(casa, _novo_time_stats())
+    sf = stats.get(fora, _novo_time_stats())
+
+    home_gf = _media_suavizada(sc["home_gf"], sc["home_jogos"], liga_home)
+    home_ga = _media_suavizada(sc["home_ga"], sc["home_jogos"], liga_away)
+    away_gf = _media_suavizada(sf["away_gf"], sf["away_jogos"], liga_away)
+    away_ga = _media_suavizada(sf["away_ga"], sf["away_jogos"], liga_home)
+
+    ataque_casa = home_gf / liga_home if liga_home else 1.0
+    defesa_fora = away_ga / liga_home if liga_home else 1.0
+    ataque_fora = away_gf / liga_away if liga_away else 1.0
+    defesa_casa = home_ga / liga_away if liga_away else 1.0
+
+    elo_factor_casa = max(0.72, min(1.35, 1 + diferenca_elo / 900))
+    elo_factor_fora = max(0.72, min(1.35, 1 - diferenca_elo / 950))
+
+    form_casa = (sum(sc["recent_points"][-5:]) / max(1, len(sc["recent_points"][-5:]))) if sc["recent_points"] else 1.35
+    form_fora = (sum(sf["recent_points"][-5:]) / max(1, len(sf["recent_points"][-5:]))) if sf["recent_points"] else 1.35
+    form_factor_casa = max(0.88, min(1.12, 1 + (form_casa - 1.35) * 0.045))
+    form_factor_fora = max(0.88, min(1.12, 1 + (form_fora - 1.35) * 0.045))
+
+    if jogos_modelo >= 6:
+        gols_casa = liga_home * ataque_casa * defesa_fora * elo_factor_casa * form_factor_casa
+        gols_fora = liga_away * ataque_fora * defesa_casa * elo_factor_fora * form_factor_fora
+        modelo_origem = "Elo dinâmico + ataque/defesa + forma recente"
+    else:
+        forca_casa = hash_forca_time(casa)
+        forca_fora = hash_forca_time(fora)
+        vantagem_casa = 0 if campo_neutro else 4
+        diferenca = (forca_casa + vantagem_casa) - forca_fora
+        gols_casa = 1.35 + diferenca * 0.025
+        gols_fora = 1.08 - diferenca * 0.020
+        modelo_origem = "Fallback por força base; pouco histórico disponível"
+
+    gols_casa = max(0.35, min(3.4, gols_casa))
+    gols_fora = max(0.25, min(3.1, gols_fora))
 
     max_gols = 8
     p_casa = 0.0
@@ -835,17 +1002,16 @@ def calcular_probabilidades(casa, fora, campo_neutro=False):
         p_empate /= total_1x2
         p_fora /= total_1x2
 
+    forca_casa = round(50 + (elo_casa - 1300) / 7)
+    forca_fora = round(50 + (elo_fora - 1300) / 7)
+    forca_casa = max(45, min(95, forca_casa))
+    forca_fora = max(45, min(95, forca_fora))
+
     intensidade = (forca_casa + forca_fora) / 2
     equilibrio = max(0, 100 - abs(forca_casa - forca_fora) * 3)
 
-    escanteios_total = max(
-        6.0,
-        min(13.0, 8.5 + (intensidade - 70) * 0.10 + (equilibrio - 60) * 0.02),
-    )
-    cartoes_total = max(
-        2.5,
-        min(7.5, 4.0 + (equilibrio - 60) * 0.015),
-    )
+    escanteios_total = max(6.0, min(13.0, 8.5 + (intensidade - 70) * 0.10 + (equilibrio - 60) * 0.02))
+    cartoes_total = max(2.5, min(7.5, 4.0 + (equilibrio - 60) * 0.015))
 
     favorito = casa
     prob_favorito = p_casa
@@ -862,6 +1028,12 @@ def calcular_probabilidades(casa, fora, campo_neutro=False):
         "fora": fora,
         "forca_casa": forca_casa,
         "forca_fora": forca_fora,
+        "elo_casa": elo_casa,
+        "elo_fora": elo_fora,
+        "jogos_modelo": jogos_modelo,
+        "modelo_origem": modelo_origem,
+        "forma_casa": form_casa,
+        "forma_fora": form_fora,
         "gols_casa": gols_casa,
         "gols_fora": gols_fora,
         "p_casa": p_casa,
@@ -882,7 +1054,7 @@ def calcular_probabilidades(casa, fora, campo_neutro=False):
 
 
 # ============================================================
-# DIAGNÓSTICO DE ACERTOS E ERROS
+# DIAGNÓSTICO E LEITURA TRADER
 # ============================================================
 
 def resultado_real(jogo):
@@ -932,6 +1104,16 @@ def diagnosticar_jogo(jogo):
     palpite_over_25 = r["over_25"] >= 0.55
     palpite_ambas = r["ambas_marcam"] >= 0.55
 
+    brier_1x2 = (
+        (r["p_casa"] - (1 if real == "casa" else 0)) ** 2
+        + (r["p_empate"] - (1 if real == "empate" else 0)) ** 2
+        + (r["p_fora"] - (1 if real == "fora" else 0)) ** 2
+    ) / 3
+
+    brier_over_15 = (r["over_15"] - (1 if total_gols >= 2 else 0)) ** 2
+    brier_over_25 = (r["over_25"] - (1 if total_gols >= 3 else 0)) ** 2
+    brier_ambas = (r["ambas_marcam"] - (1 if ambas else 0)) ** 2
+
     return {
         "jogo": jogo,
         "modelo": r,
@@ -948,6 +1130,105 @@ def diagnosticar_jogo(jogo):
         "palpite_over_15": palpite_over_15,
         "palpite_over_25": palpite_over_25,
         "palpite_ambas": palpite_ambas,
+        "brier_1x2": brier_1x2,
+        "brier_over_15": brier_over_15,
+        "brier_over_25": brier_over_25,
+        "brier_ambas": brier_ambas,
+    }
+
+
+def gerar_inteligencia_trader(diagnosticos):
+    if not diagnosticos:
+        return {"mercados": [], "times_superestimados": [], "times_subestimados": [], "alertas": []}
+
+    total = len(diagnosticos)
+    mercados = [
+        ("Resultado 1X2", sum(d["acertou_resultado"] for d in diagnosticos), total, sum(d["brier_1x2"] for d in diagnosticos) / total),
+        ("+1.5 gols", sum(d["acertou_over_15"] for d in diagnosticos), total, sum(d["brier_over_15"] for d in diagnosticos) / total),
+        ("+2.5 gols", sum(d["acertou_over_25"] for d in diagnosticos), total, sum(d["brier_over_25"] for d in diagnosticos) / total),
+        ("Ambas marcam", sum(d["acertou_ambas"] for d in diagnosticos), total, sum(d["brier_ambas"] for d in diagnosticos) / total),
+    ]
+
+    mercados_fmt = []
+    for nome, acertos, qtd, brier in mercados:
+        taxa = acertos / qtd if qtd else 0
+        if taxa >= 0.70:
+            nivel = "Forte"
+        elif taxa >= 0.58:
+            nivel = "Bom"
+        elif taxa >= 0.48:
+            nivel = "Instável"
+        else:
+            nivel = "Ruim"
+
+        mercados_fmt.append(
+            {
+                "mercado": nome,
+                "acertos": acertos,
+                "total": qtd,
+                "taxa": taxa,
+                "nivel": nivel,
+                "brier": brier,
+            }
+        )
+
+    saldo_times = {}
+    for d in diagnosticos:
+        jogo = d["jogo"]
+        casa = jogo.get("casa", "")
+        fora = jogo.get("fora", "")
+
+        saldo_times.setdefault(casa, {"super": 0, "sub": 0, "jogos": 0})
+        saldo_times.setdefault(fora, {"super": 0, "sub": 0, "jogos": 0})
+
+        saldo_times[casa]["jogos"] += 1
+        saldo_times[fora]["jogos"] += 1
+
+        if not d["acertou_resultado"]:
+            if d["palpite_key"] == "casa":
+                saldo_times[casa]["super"] += 1
+                saldo_times[fora]["sub"] += 1
+            elif d["palpite_key"] == "fora":
+                saldo_times[fora]["super"] += 1
+                saldo_times[casa]["sub"] += 1
+            elif d["palpite_key"] == "empate":
+                if d["real"] == "casa":
+                    saldo_times[casa]["sub"] += 1
+                elif d["real"] == "fora":
+                    saldo_times[fora]["sub"] += 1
+
+    times_superestimados = sorted(
+        [{"time": t, **v} for t, v in saldo_times.items() if v["super"] > 0],
+        key=lambda x: (x["super"], x["jogos"]),
+        reverse=True,
+    )[:5]
+
+    times_subestimados = sorted(
+        [{"time": t, **v} for t, v in saldo_times.items() if v["sub"] > 0],
+        key=lambda x: (x["sub"], x["jogos"]),
+        reverse=True,
+    )[:5]
+
+    alertas = []
+    melhor = max(mercados_fmt, key=lambda x: (x["taxa"], -x["brier"]))
+    pior = min(mercados_fmt, key=lambda x: (x["taxa"], -x["brier"]))
+    melhor_calibrado = min(mercados_fmt, key=lambda x: x["brier"])
+
+    alertas.append(f"Mercado mais confiável no recorte: {melhor['mercado']} ({pct(melhor['taxa'])}).")
+    alertas.append(f"Mercado mais fraco no recorte: {pior['mercado']} ({pct(pior['taxa'])}).")
+    alertas.append(f"Melhor calibração pelo Brier score: {melhor_calibrado['mercado']} ({melhor_calibrado['brier']:.3f}).")
+
+    if pior["taxa"] < 0.45:
+        alertas.append(f"Evitar confiança alta em {pior['mercado']} até o modelo estabilizar.")
+
+    if total < 6:
+        alertas.append("Amostra pequena: use este diagnóstico com cautela.")
+
+    return {
+        "mercados": mercados_fmt,
+        "times_superestimados": times_superestimados,
+        "times_subestimados": times_subestimados,
+        "alertas": alertas,
     }
 
 
@@ -967,14 +1248,10 @@ def buscar_confrontos_openligadb(casa, fora, config_openliga):
     if not config_openliga:
         return None
 
-    matches = openligadb_get_matches(
-        config_openliga["league"],
-        config_openliga["season"],
-    )
+    matches = openligadb_get_matches(config_openliga["league"], config_openliga["season"])
 
     casa_norm = normalizar_nome(casa).lower()
     fora_norm = normalizar_nome(fora).lower()
-
     confrontos = []
 
     for match in matches:
@@ -985,12 +1262,10 @@ def buscar_confrontos_openligadb(casa, fora, config_openliga):
         t2 = team2.lower()
 
         mesmo_jogo = (t1 == casa_norm and t2 == fora_norm) or (t1 == fora_norm and t2 == casa_norm)
-
         if not mesmo_jogo:
             continue
 
         score1, score2 = extrair_placar_openligadb(match)
-
         if score1 is None or score2 is None:
             continue
 
@@ -1028,16 +1303,11 @@ def buscar_confrontos_openligadb(casa, fora, config_openliga):
 
     confrontos.sort(key=lambda x: x.get("data", ""), reverse=True)
 
-    total = len(confrontos)
-    vitorias_casa = sum(1 for c in confrontos if c["vencedor"] == "casa")
-    vitorias_fora = sum(1 for c in confrontos if c["vencedor"] == "fora")
-    empates = sum(1 for c in confrontos if c["vencedor"] == "empate")
-
     return {
-        "total": total,
-        "vitorias_casa": vitorias_casa,
-        "vitorias_fora": vitorias_fora,
-        "empates": empates,
+        "total": len(confrontos),
+        "vitorias_casa": sum(1 for c in confrontos if c["vencedor"] == "casa"),
+        "vitorias_fora": sum(1 for c in confrontos if c["vencedor"] == "fora"),
+        "empates": sum(1 for c in confrontos if c["vencedor"] == "empate"),
         "confrontos": confrontos[:8],
     }
 
@@ -1084,11 +1354,7 @@ def mostrar_jogo_card(jogo, config_openliga):
     )
 
     with st.expander("📊 Análise do jogo"):
-        mostrar_analise_partida(
-            jogo.get("casa", ""),
-            jogo.get("fora", ""),
-            config_openliga,
-        )
+        mostrar_analise_partida(jogo.get("casa", ""), jogo.get("fora", ""), config_openliga)
 
 
 def mostrar_analise_partida(casa, fora, config_openliga):
@@ -1099,7 +1365,8 @@ def mostrar_analise_partida(casa, fora, config_openliga):
         <div class="summary-box">
             <b>Resumo:</b> tendência principal para <b>{esc(r["favorito"])}</b>
             com {esc(pct(r["prob_favorito"]))} de probabilidade estimada.
-            Gols esperados: {r["gols_casa"]:.2f} x {r["gols_fora"]:.2f}.
+            Gols esperados: {r["gols_casa"]:.2f} x {r["gols_fora"]:.2f}.<br>
+            <span class="muted">{esc(r["modelo_origem"])} • base: {r["jogos_modelo"]} jogo(s) encerrado(s)</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1116,8 +1383,8 @@ def mostrar_analise_partida(casa, fora, config_openliga):
         col3.metric(f"Vitória {r['fora']}", pct(r["p_fora"]))
 
         col4, col5 = st.columns(2)
-        col4.metric(f"Força {r['casa']}", r["forca_casa"])
-        col5.metric(f"Força {r['fora']}", r["forca_fora"])
+        col4.metric(f"Elo {r['casa']}", f"{r['elo_casa']:.0f}", f"Força {r['forca_casa']}")
+        col5.metric(f"Elo {r['fora']}", f"{r['elo_fora']:.0f}", f"Força {r['forca_fora']}")
 
     with aba_gols:
         col1, col2 = st.columns(2)
@@ -1155,13 +1422,9 @@ def mostrar_analise_partida(casa, fora, config_openliga):
             col3.metric(fora, f"{historico['vitorias_fora']} vitórias")
 
             for c in historico["confrontos"]:
-                st.write(
-                    f"{fmt_data(c['data'])}: {c['team1']} {c['score1']} x {c['score2']} {c['team2']}"
-                )
+                st.write(f"{fmt_data(c['data'])}: {c['team1']} {c['score1']} x {c['score2']} {c['team2']}")
 
-    st.warning(
-        "As probabilidades são estimativas matemáticas. Use como apoio estatístico, não como garantia de resultado."
-    )
+    st.warning("As probabilidades são estimativas matemáticas. Use como apoio estatístico, não como garantia de resultado.")
 
 
 def mostrar_diagnostico_card(item):
@@ -1173,11 +1436,7 @@ def mostrar_diagnostico_card(item):
     hora = jogo.get("hora") or "--:--"
     fonte = jogo.get("source", "Fonte")
 
-    real_label = {
-        "casa": jogo.get("casa"),
-        "fora": jogo.get("fora"),
-        "empate": "Empate",
-    }.get(item["real"], "-")
+    real_label = {"casa": jogo.get("casa"), "fora": jogo.get("fora"), "empate": "Empate"}.get(item["real"], "-")
 
     st.markdown(
         f"""
@@ -1208,7 +1467,8 @@ def mostrar_diagnostico_card(item):
         st.caption(
             f"Modelo: {pct(item['modelo']['p_casa'])} casa • "
             f"{pct(item['modelo']['p_empate'])} empate • "
-            f"{pct(item['modelo']['p_fora'])} fora"
+            f"{pct(item['modelo']['p_fora'])} fora • "
+            f"Brier 1X2: {item['brier_1x2']:.3f}"
         )
 
 
@@ -1223,11 +1483,7 @@ st.title(APP_TITLE)
 with st.sidebar:
     st.header("Filtros")
 
-    competicao_nome = st.selectbox(
-        "Competição",
-        list(COMPETICOES.keys()),
-        index=0,
-    )
+    competicao_nome = st.selectbox("Competição", list(COMPETICOES.keys()), index=0)
 
     filtro_periodo = st.radio(
         "Jogos",
@@ -1243,10 +1499,15 @@ with st.sidebar:
         help="Use menos dias para carregar mais rápido no celular.",
     )
 
-    buscar_openliga = st.toggle(
-        "Usar OpenLigaDB quando disponível",
-        value=True,
+    dias_historico = st.slider(
+        "Dias históricos do modelo",
+        min_value=7,
+        max_value=90,
+        value=30,
+        help="Mais dias melhoram o Elo, mas podem deixar a primeira carga mais lenta.",
     )
+
+    buscar_openliga = st.toggle("Usar OpenLigaDB quando disponível", value=True)
 
     if st.button("Atualizar dados", use_container_width=True):
         st.cache_data.clear()
@@ -1270,9 +1531,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-aba_jogos, aba_diagnostico = st.tabs(
-    ["Jogos e análises", "Diagnóstico 48h"]
-)
+aba_jogos, aba_diagnostico = st.tabs(["Jogos e análises", "Diagnóstico 48h"])
 
 
 # ============================================================
@@ -1281,18 +1540,22 @@ aba_jogos, aba_diagnostico = st.tabs(
 
 with aba_jogos:
     with st.spinner("Buscando jogos..."):
+        hist_espn, logs_hist_espn = buscar_jogos_espn_historico(config["espn"], dias=dias_historico)
+
         jogos_espn, logs_espn = buscar_jogos_espn_periodo(config["espn"], dias=dias_busca)
 
         jogos_openliga = []
         erro_openliga = ""
+        hist_openliga = []
+        erro_hist_openliga = ""
 
         if config_openliga:
-            jogos_openliga, erro_openliga = buscar_jogos_openligadb_periodo(
-                config_openliga,
-                dias=dias_busca,
-            )
+            jogos_openliga, erro_openliga = buscar_jogos_openligadb_periodo(config_openliga, dias=dias_busca)
+            hist_openliga, erro_hist_openliga = buscar_jogos_openligadb_historico(config_openliga, dias=dias_historico)
 
         jogos = combinar_fontes(jogos_espn, jogos_openliga)
+        historico_modelo = combinar_fontes(hist_espn, hist_openliga)
+        st.session_state.modelo_contexto = construir_modelo_contexto(historico_modelo)
         jogos_filtrados = filtrar_jogos(jogos, filtro_periodo)
 
     total = len(jogos_filtrados)
@@ -1302,34 +1565,34 @@ with aba_jogos:
     m1, m2, m3 = st.columns(3)
     m1.metric("Jogos exibidos", total)
     m2.metric("Ao vivo", ao_vivo)
-    m3.metric("Fontes", ", ".join(fontes) if fontes else "-")
+    m3.metric("Base modelo", st.session_state.modelo_contexto.get("jogos", 0))
+
+    st.caption(
+        f"Modelo ativo: Elo dinâmico + ataque/defesa + forma recente. "
+        f"Histórico carregado: {st.session_state.modelo_contexto.get('jogos', 0)} jogo(s)."
+    )
 
     if config_openliga:
-        st.success(
-            f"OpenLigaDB ativa: {config_openliga['league']} / {config_openliga['season']}."
-        )
+        st.success(f"OpenLigaDB ativa: {config_openliga['league']} / {config_openliga['season']}.")
     else:
-        st.info(
-            "OpenLigaDB não está configurada para esta competição. A ESPN será usada como fonte principal."
-        )
+        st.info("OpenLigaDB não está configurada para esta competição. A ESPN será usada como fonte principal.")
 
     if logs_espn:
         with st.expander("Avisos da ESPN"):
-            for log in logs_espn[:8]:
+            for log in (logs_espn + logs_hist_espn)[:8]:
                 st.write(log)
 
     if erro_openliga:
         st.caption(erro_openliga)
+    if erro_hist_openliga and config_openliga:
+        st.caption(erro_hist_openliga)
 
     st.divider()
 
     if not jogos_filtrados:
         st.warning("Nenhum jogo encontrado para os filtros selecionados.")
     else:
-        busca = st.text_input(
-            "Buscar time",
-            placeholder="Digite parte do nome do time",
-        ).strip().lower()
+        busca = st.text_input("Buscar time", placeholder="Digite parte do nome do time").strip().lower()
 
         if busca:
             jogos_filtrados = [
@@ -1352,12 +1615,16 @@ with aba_jogos:
 
 with aba_diagnostico:
     st.subheader("Diagnóstico das últimas 48 horas")
-
-    st.caption(
-        "Compara o palpite matemático principal com os jogos encerrados nas últimas 48 horas."
-    )
+    st.caption("Compara o palpite matemático principal com os jogos encerrados nas últimas 48 horas.")
 
     with st.spinner("Buscando jogos encerrados..."):
+        if "modelo_contexto" not in st.session_state:
+            hist_espn, _ = buscar_jogos_espn_historico(config["espn"], dias=dias_historico)
+            hist_openliga = []
+            if config_openliga:
+                hist_openliga, _ = buscar_jogos_openligadb_historico(config_openliga, dias=dias_historico)
+            st.session_state.modelo_contexto = construir_modelo_contexto(combinar_fontes(hist_espn, hist_openliga))
+
         diag_espn, logs_diag_espn = buscar_jogos_espn_ultimas_48h(config["espn"])
 
         diag_openliga = []
@@ -1397,6 +1664,48 @@ with aba_diagnostico:
     d5.metric("Acerto +2.5 gols", pct(taxa_over25) if total_diag else "-")
     d6.metric("Acerto ambas marcam", pct(taxa_ambas) if total_diag else "-")
 
+    inteligencia = gerar_inteligencia_trader(diagnosticos)
+
+    st.markdown("### Leitura trader do modelo")
+
+    if not diagnosticos:
+        st.info("Ainda não há jogos suficientes para gerar leitura trader.")
+    else:
+        for alerta in inteligencia["alertas"]:
+            st.info(alerta)
+
+        st.markdown("#### Confiabilidade por mercado")
+
+        for m in inteligencia["mercados"]:
+            st.markdown(
+                f"""
+                <div class="summary-box">
+                    <b>{esc(m["mercado"])}</b><br>
+                    Acertos: {m["acertos"]}/{m["total"]} •
+                    Taxa: <b>{esc(pct(m["taxa"]))}</b> •
+                    Nível: <b>{esc(m["nivel"])}</b> •
+                    Brier: <b>{m["brier"]:.3f}</b>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            st.markdown("#### Times superestimados")
+            if not inteligencia["times_superestimados"]:
+                st.caption("Nenhum sinal forte.")
+            for t in inteligencia["times_superestimados"]:
+                st.warning(f"{t['time']}: o modelo confiou demais {t['super']} vez(es) em {t['jogos']} jogo(s).")
+
+        with col_b:
+            st.markdown("#### Times subestimados")
+            if not inteligencia["times_subestimados"]:
+                st.caption("Nenhum sinal forte.")
+            for t in inteligencia["times_subestimados"]:
+                st.success(f"{t['time']}: o modelo ficou abaixo do desempenho real {t['sub']} vez(es) em {t['jogos']} jogo(s).")
+
     if logs_diag_espn:
         with st.expander("Avisos da ESPN no diagnóstico"):
             for log in logs_diag_espn[:8]:
@@ -1410,11 +1719,7 @@ with aba_diagnostico:
     if not diagnosticos:
         st.warning("Nenhum jogo encerrado encontrado nas últimas 48 horas para esta competição.")
     else:
-        filtro_diag = st.radio(
-            "Mostrar",
-            ["Todos", "Só acertos", "Só erros"],
-            horizontal=True,
-        )
+        filtro_diag = st.radio("Mostrar", ["Todos", "Só acertos", "Só erros"], horizontal=True)
 
         filtrados_diag = diagnosticos
         if filtro_diag == "Só acertos":
@@ -1426,5 +1731,6 @@ with aba_diagnostico:
             mostrar_diagnostico_card(item)
 
     st.warning(
-        "O diagnóstico mede apenas se o modelo acertou a tendência matemática. Não representa recomendação de aposta nem garantia futura."
+        "O diagnóstico mede apenas se o modelo acertou a tendência matemática. "
+        "Não representa recomendação de aposta nem garantia futura."
     )
