@@ -1,5 +1,3 @@
-Claro — copie o código completo aqui:
-
 import math
 import html
 from datetime import datetime, timedelta
