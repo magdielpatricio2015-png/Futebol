@@ -1,5 +1,6 @@
+Claro — copie o código completo aqui:
+
 import math
-import time
 import html
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -128,6 +129,13 @@ st.markdown(
         .low {
             border-left: 5px solid #dc2626;
         }
+        .live-box {
+            border: 1px solid rgba(239,68,68,.45);
+            border-radius: 18px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+            background: rgba(239,68,68,.08);
+        }
         @media (max-width: 700px) {
             .block-container {
                 padding-left: .7rem;
@@ -178,7 +186,6 @@ def forca_inicial(nome):
     if nome in FORCA_BASE:
         return 1300 + FORCA_BASE[nome] * 6
 
-    # fallback estável, não aleatório
     seed = sum(ord(c) for c in nome)
     return 1720 + (seed % 120) - 60
 
@@ -231,7 +238,7 @@ def status_legivel(jogo):
 # ESPN API
 # ============================================================
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def buscar_scoreboard_data(liga, data_yyyy_mm_dd):
     data_api = data_yyyy_mm_dd.replace("-", "")
     url = f"{ESPN_BASE}/{liga}/scoreboard"
@@ -245,7 +252,7 @@ def buscar_scoreboard_data(liga, data_yyyy_mm_dd):
         return {}, f"Erro ESPN {liga} em {data_yyyy_mm_dd}: {e}"
 
 
-@st.cache_data(ttl=240, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def buscar_periodo(liga, inicio_iso, fim_iso):
     inicio = datetime.fromisoformat(inicio_iso).date()
     fim = datetime.fromisoformat(fim_iso).date()
@@ -262,6 +269,30 @@ def buscar_periodo(liga, inicio_iso, fim_iso):
         dia += timedelta(days=1)
 
     return deduplicar(jogos), logs
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def buscar_ao_vivo_rapido(liga):
+    hoje = hoje_br()
+    jogos = []
+    logs = []
+
+    for dia in [hoje - timedelta(days=1), hoje, hoje + timedelta(days=1)]:
+        data, erro = buscar_scoreboard_data(liga, dia.isoformat())
+        if erro:
+            logs.append(erro)
+        jogos.extend(extrair_jogos(data, liga))
+
+    jogos = deduplicar(jogos)
+
+    jogos.sort(
+        key=lambda j: (
+            0 if j.get("state") == "in" else 1 if j.get("state") == "pre" else 2,
+            j.get("data") or agora_br(),
+        )
+    )
+
+    return jogos, logs
 
 
 def extrair_jogos(payload, liga):
@@ -287,7 +318,6 @@ def extrair_jogos(payload, liga):
             elif c.get("homeAway") == "away":
                 fora = c
 
-        # fallback caso a API venha em ordem diferente
         casa = casa or competidores[0]
         fora = fora or competidores[1]
 
@@ -336,7 +366,6 @@ def deduplicar(jogos):
     vistos = {}
     for j in jogos:
         k = chave_jogo(j)
-        # se duplicar, prefere o que tem placar/status mais completo
         antigo = vistos.get(k)
         if not antigo:
             vistos[k] = j
@@ -486,7 +515,6 @@ def prever(casa, fora, contexto):
     gols_fora = liga_away * atk_fora * def_casa * fator_fora * fator_forma_fora
 
     if jogos_modelo < 8:
-        # mistura com fallback para não forçar demais com pouca amostra
         fallback_casa = 1.35 + ((forca_inicial(casa) - forca_inicial(fora)) / 400) * 0.35
         fallback_fora = 1.05 - ((forca_inicial(casa) - forca_inicial(fora)) / 400) * 0.28
         peso = jogos_modelo / 8
@@ -534,7 +562,6 @@ def prever(casa, fora, contexto):
     palpite, p_top = ordenadas[0]
     p_segundo = ordenadas[1][1]
 
-    # qualidade: quantidade de jogos dos times + tamanho da base
     jogos_times = sc["jogos"] + sf["jogos"]
     qualidade = min(1.0, (jogos_modelo / 30) * 0.55 + (jogos_times / 12) * 0.45)
 
@@ -650,9 +677,11 @@ def card_jogo(jogo, contexto):
     if jogo.get("placar_casa") is not None:
         placar = f" — {jogo['placar_casa']} x {jogo['placar_fora']}"
 
+    css_extra = "live-box" if jogo.get("state") == "in" else f"game-card {r['conf_class']}"
+
     st.markdown(
         f"""
-        <div class="game-card {r['conf_class']}">
+        <div class="{css_extra}">
             <div class="game-title">{esc(jogo['casa'])} x {esc(jogo['fora'])}{esc(placar)}</div>
             <div class="muted">{esc(jogo['data_txt'])} • {esc(status_legivel(jogo))}</div>
             <span class="pill">Palpite: <b>{esc(nome_palpite)}</b></span>
@@ -703,6 +732,55 @@ def tabela_resumo(jogos, contexto):
             }
         )
     return pd.DataFrame(linhas)
+
+
+def render_ao_vivo(liga, contexto, busca="", somente_confianca=False):
+    jogos_live, logs = buscar_ao_vivo_rapido(liga)
+
+    if busca.strip():
+        b = busca.strip().lower()
+        jogos_live = [
+            j for j in jogos_live
+            if b in j["casa"].lower() or b in j["fora"].lower()
+        ]
+
+    if somente_confianca:
+        jogos_live = [
+            j for j in jogos_live
+            if prever(j["casa"], j["fora"], contexto)["confianca"] in ("Média", "Alta")
+        ]
+
+    ao_vivo = [j for j in jogos_live if j.get("state") == "in"]
+    futuros = [j for j in jogos_live if j.get("state") == "pre"]
+    encerrados = [j for j in jogos_live if j.get("state") == "post"]
+
+    st.caption(f"Última checagem ao vivo: {agora_br().strftime('%H:%M:%S')}")
+
+    if logs:
+        with st.expander("Avisos da API ao vivo"):
+            for log in logs[:8]:
+                st.write(log)
+
+    st.subheader("🔴 Jogos ao vivo")
+    if not ao_vivo:
+        st.info("Nenhum jogo ao vivo encontrado agora.")
+    else:
+        for jogo in ao_vivo:
+            card_jogo(jogo, contexto)
+
+    st.subheader("🕒 Próximos jogos")
+    if not futuros:
+        st.caption("Nenhum próximo jogo encontrado na janela rápida.")
+    else:
+        for jogo in futuros[:12]:
+            card_jogo(jogo, contexto)
+
+    with st.expander("✅ Encerrados recentes"):
+        if not encerrados:
+            st.caption("Nenhum encerrado recente.")
+        else:
+            for jogo in encerrados[:10]:
+                card_jogo(jogo, contexto)
 
 
 # ============================================================
@@ -758,7 +836,6 @@ with st.spinner("Carregando jogos e montando modelo..."):
 
     jogos, logs_jogos = buscar_periodo(liga, inicio.isoformat(), fim.isoformat())
 
-# Filtros
 if busca.strip():
     b = busca.strip().lower()
     jogos = [j for j in jogos if b in j["casa"].lower() or b in j["fora"].lower()]
@@ -778,7 +855,7 @@ with aba_jogos:
     m1.metric("Jogos encontrados", len(jogos))
     m2.metric("Base do modelo", contexto["jogos"])
     m3.metric("Média gols casa", f"{contexto['liga_home']:.2f}")
-    m4.metric("Média gols fora", f"{contexto['liga_away']:.2f}")
+    m4.metric("Atualização", agora_br().strftime("%H:%M:%S"))
 
     if logs_jogos or logs_hist:
         with st.expander("Avisos de API"):
@@ -790,15 +867,24 @@ with aba_jogos:
         "Não existe garantia de resultado no futebol."
     )
 
-    if not jogos:
-        st.warning("Nenhum jogo encontrado para os filtros.")
-    else:
-        df = tabela_resumo(jogos, contexto)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+    if modo == "Ao vivo + 48h":
 
-        st.subheader("Cards para celular")
-        for jogo in jogos:
-            card_jogo(jogo, contexto)
+        @st.fragment(run_every="20s")
+        def bloco_ao_vivo():
+            render_ao_vivo(liga, contexto, busca, somente_confianca)
+
+        bloco_ao_vivo()
+
+    else:
+        if not jogos:
+            st.warning("Nenhum jogo encontrado para os filtros.")
+        else:
+            df = tabela_resumo(jogos, contexto)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+            st.subheader("Cards para celular")
+            for jogo in jogos:
+                card_jogo(jogo, contexto)
 
 with aba_diagnostico:
     st.subheader("Diagnóstico dos últimos resultados")
