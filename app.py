@@ -9,7 +9,6 @@ import pandas as pd
 import requests
 import streamlit as st
 
-
 # ============================================================
 # ANALISADOR FUTEBOL PRO 6.0
 # ESPN + Elo + Poisson + odds auto + xG + desfalques + live
