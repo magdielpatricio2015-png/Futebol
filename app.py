@@ -1,5 +1,6 @@
 import math
 import html
+import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -15,7 +16,7 @@ import streamlit as st
 # ============================================================
 
 st.set_page_config(
-    page_title="Analisador Futebol Pro 3.0",
+    page_title="Analisador Futebol Pro 4.0 Live",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -39,7 +40,7 @@ COMPETICOES = {
     "Europa League": "uefa.europa",
 }
 
-# Base usada só quando há pouca amostra. O modelo vai corrigindo com os resultados reais.
+# Base usada quando há pouca amostra.
 FORCA_BASE = {
     "Flamengo": 86, "Palmeiras": 85, "Botafogo": 81, "Atlético-MG": 80, "Atletico-MG": 80,
     "São Paulo": 78, "Sao Paulo": 78, "Fluminense": 78, "Grêmio": 77, "Gremio": 77,
@@ -51,8 +52,31 @@ FORCA_BASE = {
     "Bayer Leverkusen": 84, "Inter Milan": 86, "Juventus": 82, "PSG": 88,
 }
 
-HEADERS = {"User-Agent": "Mozilla/5.0 AnalisadorFutebolPro/3.0"}
+# Clássicos/rivalidades: aumenta empate e reduz confiança do 1X2.
+CLASSICOS = [
+    ("Flamengo", "Vasco"),
+    ("Flamengo", "Fluminense"),
+    ("Flamengo", "Botafogo"),
+    ("Palmeiras", "Corinthians"),
+    ("São Paulo", "Corinthians"),
+    ("Sao Paulo", "Corinthians"),
+    ("São Paulo", "Palmeiras"),
+    ("Sao Paulo", "Palmeiras"),
+    ("Grêmio", "Internacional"),
+    ("Gremio", "Internacional"),
+    ("Atlético-MG", "Cruzeiro"),
+    ("Atletico-MG", "Cruzeiro"),
+    ("Bahia", "Vitória"),
+    ("Bahia", "Vitoria"),
+    ("Real Madrid", "Barcelona"),
+    ("Manchester City", "Manchester United"),
+    ("Liverpool", "Everton"),
+    ("Inter Milan", "AC Milan"),
+    ("Juventus", "Torino"),
+    ("Bayern Munich", "Borussia Dortmund"),
+]
 
+HEADERS = {"User-Agent": "Mozilla/5.0 AnalisadorFutebolPro/4.0"}
 MAX_GOLS = 10
 
 
@@ -91,6 +115,14 @@ st.markdown(
             padding: 12px 14px;
             margin-bottom: 14px;
             background: rgba(239,68,68,.08);
+            border-left: 5px solid #ef4444;
+        }
+        .warn-box {
+            border: 1px solid rgba(202,138,4,.45);
+            border-radius: 14px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            background: rgba(202,138,4,.08);
         }
         @media (max-width: 700px) {
             .block-container { padding-left: .7rem; padding-right: .7rem; }
@@ -171,7 +203,7 @@ def parse_dt_espn(value):
 
 
 def poisson(k, lam):
-    lam = max(0.05, float(lam))
+    lam = max(0.01, float(lam))
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
 
 
@@ -196,6 +228,45 @@ def resultado_real(jogo):
     if gc < gf:
         return "Fora"
     return "Empate"
+
+
+def eh_classico(casa, fora):
+    nc = normalizar_nome(casa)
+    nf = normalizar_nome(fora)
+    for a, b in CLASSICOS:
+        na = normalizar_nome(a)
+        nb = normalizar_nome(b)
+        if (nc == na and nf == nb) or (nc == nb and nf == na):
+            return True
+    return False
+
+
+def extrair_minuto(status):
+    """
+    Tenta ler o minuto vindo da ESPN.
+    Exemplos possíveis: "45'", "45'+2'", "HT", "90'+5'".
+    """
+    txt = str(status or "")
+
+    m = re.search(r"(\d+)\s*'\s*\+\s*(\d+)", txt)
+    if m:
+        return int(m.group(1)) + int(m.group(2))
+
+    m = re.search(r"(\d+)\s*'", txt)
+    if m:
+        return int(m.group(1))
+
+    low = txt.lower()
+    if "half" in low or "intervalo" in low or low == "ht":
+        return 45
+    if "full" in low or "encerrado" in low or low == "ft":
+        return 90
+
+    return 0
+
+
+def nome_jogo(jogo):
+    return f"{jogo.get('casa', '')} x {jogo.get('fora', '')}"
 
 
 # ============================================================
@@ -322,12 +393,7 @@ def deduplicar(jogos):
 
 
 # ============================================================
-# MODELO
-# Melhorias:
-# - amostra suavizada por liga
-# - peso maior para jogos recentes
-# - ajuste de empate
-# - diagnóstico temporal sem vazamento
+# MODELO PRÉ-JOGO
 # ============================================================
 
 def novo_stats():
@@ -457,7 +523,6 @@ def media_suave(valor, peso, media_liga, peso_liga=6.5):
 
 
 def ajustar_empate(p_casa, p_empate, p_fora, taxa_empate_liga, diff_elo):
-    # Aumenta empate quando forças são próximas; reduz em jogos muito desnivelados.
     proximidade = max(0, 1 - abs(diff_elo) / 260)
     alvo_empate = clamp(taxa_empate_liga + 0.055 * proximidade, 0.18, 0.36)
 
@@ -471,6 +536,34 @@ def ajustar_empate(p_casa, p_empate, p_fora, taxa_empate_liga, diff_elo):
         novo_empate,
         p_fora / restante_antigo * restante_novo,
     )
+
+
+def recalcular_derivados(r):
+    probs = {"Casa": r["p_casa"], "Empate": r["p_empate"], "Fora": r["p_fora"]}
+    ordenadas = sorted(probs.items(), key=lambda x: x[1], reverse=True)
+
+    r["palpite"] = ordenadas[0][0]
+    r["prob_palpite"] = ordenadas[0][1]
+    r["p_segundo"] = ordenadas[1][1]
+
+    mercados = [
+        ("+1.5 gols", r.get("over15", 0)),
+        ("Under 3.5 gols", r.get("under35", 0)),
+        ("Ambas marcam", r.get("btts", 0)),
+        ("+2.5 gols", r.get("over25", 0)),
+    ]
+
+    melhor_mercado = "1X2"
+    melhor_mercado_prob = r["prob_palpite"]
+
+    for nome, prob in mercados:
+        if prob >= melhor_mercado_prob + 0.08 and prob >= 0.58:
+            melhor_mercado = nome
+            melhor_mercado_prob = prob
+
+    r["melhor_mercado"] = melhor_mercado
+    r["melhor_mercado_prob"] = melhor_mercado_prob
+    return r
 
 
 def prever(casa, fora, contexto):
@@ -513,7 +606,6 @@ def prever(casa, fora, contexto):
     gols_casa = liga_home * atk_casa * def_fora * fator_casa * fator_forma_casa
     gols_fora = liga_away * atk_fora * def_casa * fator_fora * fator_forma_fora
 
-    # Fallback forte quando a liga tem pouca amostra.
     if jogos_modelo < 12:
         diff_base = forca_inicial(casa) - forca_inicial(fora)
         fallback_casa = 1.35 + (diff_base / 400) * 0.33
@@ -522,77 +614,120 @@ def prever(casa, fora, contexto):
         gols_casa = gols_casa * peso + fallback_casa * (1 - peso)
         gols_fora = gols_fora * peso + fallback_fora * (1 - peso)
 
+    if eh_classico(casa, fora):
+        # Clássico: reduz um pouco a confiança do favorito e puxa empate para cima.
+        gols_casa *= 0.95
+        gols_fora *= 0.95
+
     gols_casa = clamp(gols_casa, 0.35, 3.60)
     gols_fora = clamp(gols_fora, 0.25, 3.25)
 
+    r = calcular_probabilidades_poisson(
+        gols_casa,
+        gols_fora,
+        base_casa=0,
+        base_fora=0,
+        max_extra=MAX_GOLS,
+    )
+
+    p_casa, p_empate, p_fora = ajustar_empate(
+        r["p_casa"], r["p_empate"], r["p_fora"], contexto.get("taxa_empate", 0.27), diff_elo
+    )
+
+    if eh_classico(casa, fora):
+        p_empate = clamp(p_empate * 1.08, 0.05, 0.46)
+        restante = max(1e-9, r["p_casa"] + r["p_fora"])
+        p_casa = r["p_casa"] / restante * (1 - p_empate)
+        p_fora = r["p_fora"] / restante * (1 - p_empate)
+
+    # Regularização anti-overconfidence.
+    p_casa = 0.94 * p_casa + 0.06 * 0.3333
+    p_empate = 0.94 * p_empate + 0.06 * 0.3333
+    p_fora = 0.94 * p_fora + 0.06 * 0.3333
+
+    total = p_casa + p_empate + p_fora
+    r["p_casa"], r["p_empate"], r["p_fora"] = p_casa / total, p_empate / total, p_fora / total
+
+    jogos_times = sc["jogos"] + sf["jogos"]
+    qualidade = clamp((jogos_modelo / 42) * 0.52 + (jogos_times / 16) * 0.48, 0, 1)
+
+    r.update(
+        {
+            "casa": casa,
+            "fora": fora,
+            "gols_casa": gols_casa,
+            "gols_fora": gols_fora,
+            "elo_casa": elo_casa,
+            "elo_fora": elo_fora,
+            "diff_elo": diff_elo,
+            "qualidade": qualidade,
+            "jogos_modelo": jogos_modelo,
+            "amostra_times": jogos_times,
+            "is_live": False,
+            "minuto": None,
+            "alertas": [],
+            "classico": eh_classico(casa, fora),
+        }
+    )
+
+    r = recalcular_derivados(r)
+
+    margem = r["prob_palpite"] - r["p_segundo"]
+    if qualidade >= 0.66 and r["prob_palpite"] >= 0.60 and margem >= 0.13:
+        confianca, conf_class = "Alta", "good"
+    elif qualidade >= 0.45 and r["prob_palpite"] >= 0.535 and margem >= 0.075:
+        confianca, conf_class = "Média", "medium"
+    else:
+        confianca, conf_class = "Baixa", "low"
+
+    if eh_classico(casa, fora) and confianca == "Alta":
+        confianca, conf_class = "Média", "medium"
+
+    r["confianca"] = confianca
+    r["conf_class"] = conf_class
+
+    return r
+
+
+# ============================================================
+# MODELO AO VIVO
+# ============================================================
+
+def calcular_probabilidades_poisson(lam_casa, lam_fora, base_casa=0, base_fora=0, max_extra=10):
     p_casa = p_empate = p_fora = 0.0
     over15 = over25 = btts = under35 = 0.0
     placares = []
 
-    for i in range(MAX_GOLS + 1):
-        for k in range(MAX_GOLS + 1):
-            p = poisson(i, gols_casa) * poisson(k, gols_fora)
-            placares.append((p, i, k))
+    for add_casa in range(max_extra + 1):
+        for add_fora in range(max_extra + 1):
+            final_casa = int(base_casa) + add_casa
+            final_fora = int(base_fora) + add_fora
 
-            if i > k:
+            p = poisson(add_casa, lam_casa) * poisson(add_fora, lam_fora)
+            placares.append((p, final_casa, final_fora))
+
+            if final_casa > final_fora:
                 p_casa += p
-            elif i == k:
+            elif final_casa == final_fora:
                 p_empate += p
             else:
                 p_fora += p
 
-            if i + k >= 2:
+            total_gols = final_casa + final_fora
+            if total_gols >= 2:
                 over15 += p
-            if i + k >= 3:
+            if total_gols >= 3:
                 over25 += p
-            if i + k <= 3:
+            if total_gols <= 3:
                 under35 += p
-            if i > 0 and k > 0:
+            if final_casa > 0 and final_fora > 0:
                 btts += p
 
     total = p_casa + p_empate + p_fora
     if total:
         p_casa, p_empate, p_fora = p_casa / total, p_empate / total, p_fora / total
 
-    p_casa, p_empate, p_fora = ajustar_empate(
-        p_casa, p_empate, p_fora, contexto.get("taxa_empate", 0.27), diff_elo
-    )
-
-    probs = {"Casa": p_casa, "Empate": p_empate, "Fora": p_fora}
-    ordenadas = sorted(probs.items(), key=lambda x: x[1], reverse=True)
-    palpite, p_top = ordenadas[0]
-    p_segundo = ordenadas[1][1]
-
-    jogos_times = sc["jogos"] + sf["jogos"]
-    qualidade = clamp((jogos_modelo / 42) * 0.52 + (jogos_times / 16) * 0.48, 0, 1)
-
-    margem = p_top - p_segundo
-    if qualidade >= 0.66 and p_top >= 0.60 and margem >= 0.13:
-        confianca, conf_class = "Alta", "good"
-    elif qualidade >= 0.45 and p_top >= 0.535 and margem >= 0.075:
-        confianca, conf_class = "Média", "medium"
-    else:
-        confianca, conf_class = "Baixa", "low"
-
-    # Sugestão: evitar forçar 1X2 quando o valor estatístico é baixo.
-    melhor_mercado = "1X2"
-    melhor_mercado_prob = p_top
-    mercados = [
-        ("+1.5 gols", over15),
-        ("Under 3.5 gols", under35),
-        ("Ambas marcam", btts),
-        ("+2.5 gols", over25),
-    ]
-    for nome, prob in mercados:
-        if prob >= melhor_mercado_prob + 0.08 and prob >= 0.58:
-            melhor_mercado = nome
-            melhor_mercado_prob = prob
-
     return {
-        "casa": casa,
-        "fora": fora,
-        "gols_casa": gols_casa,
-        "gols_fora": gols_fora,
         "p_casa": p_casa,
         "p_empate": p_empate,
         "p_fora": p_fora,
@@ -600,21 +735,201 @@ def prever(casa, fora, contexto):
         "over25": over25,
         "under35": under35,
         "btts": btts,
-        "elo_casa": elo_casa,
-        "elo_fora": elo_fora,
-        "diff_elo": diff_elo,
-        "palpite": palpite,
-        "prob_palpite": p_top,
-        "confianca": confianca,
-        "conf_class": conf_class,
-        "qualidade": qualidade,
         "placares_top": sorted(placares, reverse=True)[:4],
-        "jogos_modelo": jogos_modelo,
-        "amostra_times": jogos_times,
-        "melhor_mercado": melhor_mercado,
-        "melhor_mercado_prob": melhor_mercado_prob,
     }
 
+
+def aplicar_vermelhos(lam_casa, lam_fora, vermelho_casa=0, vermelho_fora=0):
+    """
+    Ajuste simples:
+    - time com vermelho reduz produção ofensiva
+    - adversário aumenta produção ofensiva
+    """
+    vermelho_casa = int(vermelho_casa or 0)
+    vermelho_fora = int(vermelho_fora or 0)
+
+    if vermelho_casa:
+        lam_casa *= 0.72 ** vermelho_casa
+        lam_fora *= 1.22 ** vermelho_casa
+
+    if vermelho_fora:
+        lam_fora *= 0.72 ** vermelho_fora
+        lam_casa *= 1.22 ** vermelho_fora
+
+    return lam_casa, lam_fora
+
+
+def ajustar_pressao_por_placar(lam_casa, lam_fora, gc, gf, minuto, diff_elo):
+    """
+    Ajuste heurístico:
+    - favorito perdendo tende a atacar mais;
+    - azarão vencendo tende a proteger resultado;
+    - quanto mais tarde, maior o efeito.
+    """
+    saldo_casa = gc - gf
+    fase = clamp(minuto / 90, 0, 1)
+
+    casa_favorita = diff_elo > 80
+    fora_favorito = diff_elo < -80
+
+    if casa_favorita and saldo_casa < 0:
+        lam_casa *= 1 + 0.25 * fase
+        lam_fora *= 0.92
+    elif casa_favorita and saldo_casa > 0:
+        lam_casa *= 0.90
+        lam_fora *= 1 + 0.10 * fase
+
+    if fora_favorito and saldo_casa > 0:
+        lam_fora *= 1 + 0.25 * fase
+        lam_casa *= 0.92
+    elif fora_favorito and saldo_casa < 0:
+        lam_fora *= 0.90
+        lam_casa *= 1 + 0.10 * fase
+
+    # Se está empatado muito tarde, reduz expectativa geral.
+    if saldo_casa == 0 and minuto >= 75:
+        lam_casa *= 0.82
+        lam_fora *= 0.82
+
+    return lam_casa, lam_fora
+
+
+def fator_tempo_restante(minuto):
+    """
+    Retorna fração aproximada do jogo restante.
+    Usa 96 em vez de 90 para acomodar acréscimos.
+    """
+    minuto = clamp(int(minuto or 0), 0, 105)
+    return clamp((96 - minuto) / 96, 0.02, 1.0)
+
+
+def ajustar_ao_vivo(jogo, r_pre, vermelho_casa=0, vermelho_fora=0):
+    if jogo.get("state") != "in":
+        return r_pre
+
+    minuto = extrair_minuto(jogo.get("status", ""))
+    gc = jogo.get("placar_casa")
+    gf = jogo.get("placar_fora")
+
+    gc = int(gc) if gc is not None else 0
+    gf = int(gf) if gf is not None else 0
+
+    restante = fator_tempo_restante(minuto)
+
+    lam_casa = r_pre["gols_casa"] * restante
+    lam_fora = r_pre["gols_fora"] * restante
+
+    lam_casa, lam_fora = ajustar_pressao_por_placar(
+        lam_casa,
+        lam_fora,
+        gc,
+        gf,
+        minuto,
+        r_pre.get("diff_elo", 0),
+    )
+
+    lam_casa, lam_fora = aplicar_vermelhos(lam_casa, lam_fora, vermelho_casa, vermelho_fora)
+
+    lam_casa = clamp(lam_casa, 0.01, 3.5)
+    lam_fora = clamp(lam_fora, 0.01, 3.5)
+
+    r_live = calcular_probabilidades_poisson(
+        lam_casa,
+        lam_fora,
+        base_casa=gc,
+        base_fora=gf,
+        max_extra=8,
+    )
+
+    r = {**r_pre, **r_live}
+    r["gols_casa_live"] = lam_casa
+    r["gols_fora_live"] = lam_fora
+    r["minuto"] = minuto
+    r["is_live"] = True
+    r["vermelho_casa"] = vermelho_casa
+    r["vermelho_fora"] = vermelho_fora
+    r["alertas"] = []
+
+    saldo_casa = gc - gf
+
+    if vermelho_casa:
+        r["alertas"].append(f"{jogo['casa']} com {vermelho_casa} vermelho(s): ataque reduzido e risco defensivo maior.")
+    if vermelho_fora:
+        r["alertas"].append(f"{jogo['fora']} com {vermelho_fora} vermelho(s): ataque reduzido e risco defensivo maior.")
+
+    if r_pre.get("diff_elo", 0) > 80 and saldo_casa < 0:
+        r["alertas"].append("Favorito mandante está perdendo: probabilidade pré-jogo foi rebaixada pelo placar e tempo restante.")
+    if r_pre.get("diff_elo", 0) < -80 and saldo_casa > 0:
+        r["alertas"].append("Favorito visitante está perdendo: probabilidade pré-jogo foi rebaixada pelo placar e tempo restante.")
+    if minuto >= 70:
+        r["alertas"].append("Jogo em fase final: o tempo restante pesa muito mais que a força pré-jogo.")
+
+    r = recalcular_derivados(r)
+
+    # Confiança ao vivo: baseada mais no estado atual do jogo.
+    margem = r["prob_palpite"] - r.get("p_segundo", 0)
+    if minuto >= 75 and margem >= 0.22:
+        r["confianca"] = "Alta ao vivo"
+        r["conf_class"] = "good"
+    elif margem >= 0.12:
+        r["confianca"] = "Média ao vivo"
+        r["conf_class"] = "medium"
+    else:
+        r["confianca"] = "Baixa ao vivo"
+        r["conf_class"] = "low"
+
+    return r
+
+
+def obter_vermelhos_para_jogo(jogo):
+    key = f"red_{jogo.get('id') or chave_jogo(jogo)}"
+    return st.session_state.get(key, {"casa": 0, "fora": 0})
+
+
+def seletor_vermelhos(jogo):
+    key = f"red_{jogo.get('id') or chave_jogo(jogo)}"
+    atual = st.session_state.get(key, {"casa": 0, "fora": 0})
+
+    c1, c2 = st.columns(2)
+    vc = c1.number_input(
+        f"Vermelhos {jogo['casa']}",
+        min_value=0,
+        max_value=3,
+        value=int(atual.get("casa", 0)),
+        step=1,
+        key=f"{key}_casa",
+    )
+    vf = c2.number_input(
+        f"Vermelhos {jogo['fora']}",
+        min_value=0,
+        max_value=3,
+        value=int(atual.get("fora", 0)),
+        step=1,
+        key=f"{key}_fora",
+    )
+
+    st.session_state[key] = {"casa": vc, "fora": vf}
+    return vc, vf
+
+
+def prever_jogo(jogo, contexto):
+    r_pre = prever(jogo["casa"], jogo["fora"], contexto)
+
+    if jogo.get("state") == "in":
+        vermelhos = obter_vermelhos_para_jogo(jogo)
+        return ajustar_ao_vivo(
+            jogo,
+            r_pre,
+            vermelho_casa=vermelhos.get("casa", 0),
+            vermelho_fora=vermelhos.get("fora", 0),
+        )
+
+    return r_pre
+
+
+# ============================================================
+# BACKTEST
+# ============================================================
 
 def explicar_erro(jogo, r, real, acertou):
     if acertou:
@@ -692,7 +1007,15 @@ def backtest_temporal(jogos_hist, limite=70, janela_treino=120):
 # ============================================================
 
 def card_jogo(jogo, contexto):
-    r = prever(jogo["casa"], jogo["fora"], contexto)
+    r_pre = prever(jogo["casa"], jogo["fora"], contexto)
+
+    if jogo.get("state") == "in":
+        with st.expander(f"🔴 Ajustes ao vivo: {nome_jogo(jogo)}", expanded=False):
+            st.caption("Ajuste manual porque o endpoint da ESPN nem sempre traz cartões com segurança.")
+            vc, vf = seletor_vermelhos(jogo)
+        r = ajustar_ao_vivo(jogo, r_pre, vc, vf)
+    else:
+        r = r_pre
 
     nome_palpite = {"Casa": jogo["casa"], "Fora": jogo["fora"], "Empate": "Empate"}[r["palpite"]]
     placar = ""
@@ -700,6 +1023,15 @@ def card_jogo(jogo, contexto):
         placar = f" — {jogo['placar_casa']} x {jogo['placar_fora']}"
 
     css_extra = "live-box" if jogo.get("state") == "in" else f"game-card {r['conf_class']}"
+
+    live_info = ""
+    if r.get("is_live"):
+        live_info = (
+            f'<span class="pill">Minuto: <b>{r.get("minuto", 0)}\'</b></span>'
+            f'<span class="pill">Gols restantes esp.: <b>{r.get("gols_casa_live", 0):.2f} x {r.get("gols_fora_live", 0):.2f}</b></span>'
+        )
+
+    classico_info = '<span class="pill">Clássico: <b>sim</b></span>' if r.get("classico") else ""
 
     st.markdown(
         f"""
@@ -710,11 +1042,16 @@ def card_jogo(jogo, contexto):
             <span class="pill">Prob.: <b>{esc(pct(r['prob_palpite']))}</b></span>
             <span class="pill">Confiança: <b>{esc(r['confianca'])}</b></span>
             <span class="pill">Melhor mercado: <b>{esc(r['melhor_mercado'])} {esc(pct(r['melhor_mercado_prob']))}</b></span>
-            <span class="pill">Gols esp.: <b>{r['gols_casa']:.2f} x {r['gols_fora']:.2f}</b></span>
+            <span class="pill">Gols pré: <b>{r_pre['gols_casa']:.2f} x {r_pre['gols_fora']:.2f}</b></span>
+            {live_info}
+            {classico_info}
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    for alerta in r.get("alertas", []):
+        st.markdown(f'<div class="warn-box">⚠️ {esc(alerta)}</div>', unsafe_allow_html=True)
 
     with st.expander("Ver análise detalhada"):
         c1, c2, c3 = st.columns(3)
@@ -729,7 +1066,14 @@ def card_jogo(jogo, contexto):
         g4.metric("Ambas marcam", pct(r["btts"]))
 
         ptxt = ", ".join([f"{i}x{k} ({pct(p)})" for p, i, k in r["placares_top"]])
-        st.caption(f"Placares mais prováveis: {ptxt}")
+        st.caption(f"Placares finais mais prováveis: {ptxt}")
+
+        if r.get("is_live"):
+            st.caption(
+                f"Ao vivo: minuto {r.get('minuto', 0)}. "
+                f"Modelo recalculado com placar atual, tempo restante e vermelhos manuais."
+            )
+
         st.caption(
             f"Base: {r['jogos_modelo']} jogos. Amostra dos times: {r['amostra_times']} jogos. "
             f"Qualidade: {pct(r['qualidade'])}. Elo ajustado: {r['elo_casa']:.0f} x {r['elo_fora']:.0f}."
@@ -739,13 +1083,15 @@ def card_jogo(jogo, contexto):
 def tabela_resumo(jogos, contexto):
     linhas = []
     for j in jogos:
-        r = prever(j["casa"], j["fora"], contexto)
+        r = prever_jogo(j, contexto)
         nome_palpite = {"Casa": j["casa"], "Fora": j["fora"], "Empate": "Empate"}[r["palpite"]]
         linhas.append(
             {
                 "Data": j["data_txt"],
                 "Jogo": f"{j['casa']} x {j['fora']}",
                 "Status": status_legivel(j),
+                "Min.": f"{r.get('minuto')}’" if r.get("is_live") else "-",
+                "Placar": f"{j['placar_casa']}x{j['placar_fora']}" if j.get("placar_casa") is not None else "-",
                 "Palpite 1X2": nome_palpite,
                 "Prob.": pct(r["prob_palpite"]),
                 "Conf.": r["confianca"],
@@ -773,7 +1119,7 @@ def render_ao_vivo(liga, contexto, busca="", somente_confianca=False):
     if somente_confianca:
         jogos_live = [
             j for j in jogos_live
-            if prever(j["casa"], j["fora"], contexto)["confianca"] in ("Média", "Alta")
+            if prever_jogo(j, contexto)["confianca"] in ("Média", "Alta", "Média ao vivo", "Alta ao vivo")
         ]
 
     ao_vivo = [j for j in jogos_live if j.get("state") == "in"]
@@ -813,8 +1159,10 @@ def render_ao_vivo(liga, contexto, busca="", somente_confianca=False):
 # APP
 # ============================================================
 
-st.title("⚽ Analisador Futebol Pro 3.0")
-st.caption("Modelo com Elo, Poisson calibrado, recência, ajuste de empate e diagnóstico temporal sem vazamento.")
+st.title("⚽ Analisador Futebol Pro 4.0 Live")
+st.caption(
+    "Modelo com Elo, Poisson calibrado, recência, clássico, diagnóstico temporal e ajuste ao vivo por minuto, placar e vermelhos."
+)
 
 with st.sidebar:
     st.header("Configurações")
@@ -835,7 +1183,8 @@ with st.sidebar:
     busca = st.text_input("Filtrar time", placeholder="Ex.: Flamengo")
 
     st.divider()
-    st.caption("Dica: previsões de confiança baixa são exibidas, mas devem ser evitadas no desafio.")
+    st.caption("Ao vivo: abra o card de ajustes e informe cartões vermelhos, se houver.")
+    st.caption("Dica: evite 1X2 em clássico ou confiança baixa; prefira mercado com maior probabilidade.")
 
     if st.button("🔄 Atualizar dados"):
         st.cache_data.clear()
@@ -872,7 +1221,7 @@ if busca.strip():
 if somente_confianca:
     jogos = [
         j for j in jogos
-        if prever(j["casa"], j["fora"], contexto)["confianca"] in ("Média", "Alta")
+        if prever_jogo(j, contexto)["confianca"] in ("Média", "Alta", "Média ao vivo", "Alta ao vivo")
     ]
 
 aba_jogos, aba_diagnostico, aba_ranking = st.tabs(
@@ -893,8 +1242,8 @@ with aba_jogos:
                 st.write(log)
 
     st.info(
-        "Use como análise estatística. Para mais acertibilidade, priorize: confiança média/alta, "
-        "melhor mercado acima de 58% e boa amostra dos times."
+        "Use como análise estatística. No ao vivo, a probabilidade é recalculada com placar, minuto, "
+        "tempo restante e cartões vermelhos manuais."
     )
 
     if modo == "Ao vivo + 48h":
@@ -990,14 +1339,13 @@ with aba_ranking:
 
         linhas = [
             {"Mercado": "Resultado 1X2", "Acertos": sum(a["acertou"] for a in avaliacoes), "Total": total},
-            {"+": "", "Mercado": "+1.5 gols", "Acertos": sum(a["over15_ok"] for a in avaliacoes), "Total": total},
+            {"Mercado": "+1.5 gols", "Acertos": sum(a["over15_ok"] for a in avaliacoes), "Total": total},
             {"Mercado": "+2.5 gols", "Acertos": sum(a["over25_ok"] for a in avaliacoes), "Total": total},
             {"Mercado": "Under 3.5 gols", "Acertos": sum(a["under35_ok"] for a in avaliacoes), "Total": total},
             {"Mercado": "Ambas marcam", "Acertos": sum(a["btts_ok"] for a in avaliacoes), "Total": total},
         ]
 
         for linha in linhas:
-            linha.pop("+", None)
             linha["Taxa_num"] = linha["Acertos"] / max(1, linha["Total"])
             if linha["Taxa_num"] >= 0.68:
                 linha["Leitura"] = "Forte"
