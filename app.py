@@ -135,6 +135,15 @@ st.markdown(
     .green { color: #16883c; font-weight: 800; }
     .red { color: #c92a2a; font-weight: 800; }
     .stButton>button { background-color: #0d6efd; color: white; border-radius: 5px; }
+    .live-badge {
+        background: #dc2626;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 0.8rem;
+        margin-left: 8px;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -452,17 +461,32 @@ def prever_jogo(jogo, contexto, desfalques_home=0, desfalques_away=0, ajuste_hom
         "riscos": riscos, **extras,
     }
 
-# --- Renderização ---
+# --- Renderização (com suporte a live) ---
 def criar_jogo_manual(home, away):
     return {"id": "manual", "home": nome_limpo(home), "away": nome_limpo(away), "data_txt": "Manual", "status": "análise manual", "completed": False, "live": False, "placar_home": 0, "placar_away": 0}
 
 def render_card(jogo, r):
     mapa = {"Casa": jogo["home"], "Fora": jogo["away"], "Empate": "Empate"}
     riscos = ", ".join(r["riscos"]) if r["riscos"] else "baixo risco"
-    placar = f" - {jogo['placar_home']} x {jogo['placar_away']}" if jogo.get("completed") or jogo.get("live") else ""
+    live = jogo.get("live", False)
+
+    # Define a classe do card combinando decisão e status ao vivo
+    if live:
+        card_class = f"{r['classe']} live"
+    else:
+        card_class = r["classe"]
+
+    # Exibe placar atual e badge de AO VIVO
+    if live:
+        placar = f" - {jogo['placar_home']} x {jogo['placar_away']} <span class='live-badge'>🔴 AO VIVO</span>"
+    elif jogo.get("completed"):
+        placar = f" - {jogo['placar_home']} x {jogo['placar_away']} (encerrado)"
+    else:
+        placar = ""
+
     st.markdown(
         f"""
-        <div class="card {r['classe']}">
+        <div class="card {card_class}">
             <div class="card-title">{jogo['home']} x {jogo['away']}{placar}</div>
             <div class="muted">{jogo.get('data_txt', '')} | {jogo.get('status', '')}</div>
             <span class="pill">Vitória {jogo['home']}: <strong>{pct(r['p_h'])}</strong></span>
@@ -524,6 +548,9 @@ def main():
         with col2:
             dias_futuro = st.slider("Dias futuros", 0, 7, 3)
 
+        # --- Opção de jogos ao vivo ---
+        mostrar_ao_vivo = st.checkbox("🔴 Mostrar apenas jogos ao vivo")
+
         modo_manual = st.checkbox("Adicionar jogo manual")
         if modo_manual:
             with st.form("manual_form"):
@@ -553,38 +580,39 @@ def main():
                 previsao = prever_jogo(j, contexto, desf_h, desf_a)
                 todos_jogos.append((j, previsao))
 
-        # Incluir jogo manual (se existir)
         if "jogo_manual" in st.session_state:
             mj, mh, ma = st.session_state["jogo_manual"]
-            # Montar contexto com os jogos já carregados + manual (mesmo contexto)
-            # Nota: o jogo manual não afeta o contexto, apenas usamos o mesmo contexto
             previsao_m = prever_jogo(mj, contexto, mh, ma)
             todos_jogos.append((mj, previsao_m))
 
-        # Ordenar por data (manuais no fim)
-        todos_jogos.sort(key=lambda x: x[0].get("data") or datetime.max)
+        # Filtra apenas jogos ao vivo, se checkbox marcado
+        if mostrar_ao_vivo:
+            todos_jogos = [(j, p) for j, p in todos_jogos if j.get("live")]
 
-    st.header(f"📊 Análises – {liga_nome} ({len(todos_jogos)} jogos)")
+        # Ordenar: live first, then by date
+        todos_jogos.sort(key=lambda x: (not x[0].get("live"), x[0].get("data") or datetime.max))
+
+    if mostrar_ao_vivo:
+        st.header(f"📺 Jogos ao vivo – {liga_nome} ({len(todos_jogos)} jogo(s))")
+    else:
+        st.header(f"📊 Análises – {liga_nome} ({len(todos_jogos)} jogos)")
+
     if logs:
         with st.expander("Logs de erros na API"):
             for log in logs:
                 st.warning(log)
 
     if not todos_jogos:
-        st.info("Nenhum jogo encontrado no período selecionado.")
+        st.info("Nenhum jogo ao vivo no momento." if mostrar_ao_vivo else "Nenhum jogo encontrado no período selecionado.")
         return
 
-    # Exibir cards
     for jogo, prev in todos_jogos:
         render_card(jogo, prev)
-
-        # Caixa de valor se odds informadas
         try:
             odd = float(odd_input) if odd_input else 0
         except:
             odd = 0
         if odd > 0:
-            # Aplicar ao palpite principal
             if prev["palpite"] == "Casa":
                 prob = prev["p_h"]
                 mercado = f"Vitória {jogo['home']}"
@@ -596,7 +624,7 @@ def main():
                 mercado = "Empate"
             render_value_box(f"{mercado} (Palpite)", prob, odd, banca)
 
-    # Tabela resumo de cartões e escanteios
+    # Tabela resumo (caso não seja apenas ao vivo, ou sempre? Mostramos se houver jogos)
     st.subheader("📋 Resumo – Cartões e Escanteios")
     df = pd.DataFrame([{
         "Jogo": f"{j['home']} x {j['away']}",
