@@ -2,22 +2,27 @@ import math
 import re
 import unicodedata
 from datetime import datetime, timedelta, timezone
+from collections import defaultdict
 
 import pandas as pd
 import requests
 import streamlit as st
 
-# --- Configuração da página ---
+# ----------------------------------------------------------------------
+# Configuração da página
+# ----------------------------------------------------------------------
 st.set_page_config(
-    page_title="Analisador Esportivo Pro 10.2",
-    page_icon="AE",
+    page_title="Analisador Esportivo Pro 10.3",
+    page_icon="⚽",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# --- Constantes ---
+# ----------------------------------------------------------------------
+# Constantes
+# ----------------------------------------------------------------------
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
-HEADERS = {"User-Agent": "AnalisadorEsportivoPro/10.2"}
+HEADERS = {"User-Agent": "AnalisadorEsportivoPro/10.3"}
 MAX_GOLS = 10
 RETRIES = 2
 
@@ -76,7 +81,6 @@ CLASSICOS = {
     tuple(sorted(["inter milan", "milan"])),
 }
 
-# --- JOGADORES ATUALIZADOS (maio 2026) ---
 JOGADORES = {
     "flamengo": [("Pedro", 0.35), ("Arrascaeta", 0.18), ("Bruno Henrique", 0.15)],
     "palmeiras": [("Raphael Veiga", 0.25), ("Flaco López", 0.30)],
@@ -93,11 +97,9 @@ JOGADORES = {
     "internacional": [("Enner Valencia", 0.30), ("Wanderson", 0.15)],
 }
 
-def obter_finalizadores(time_nome):
-    nt = normalizar(time_nome)
-    return JOGADORES.get(nt, [])
-
-# --- CSS ---
+# ----------------------------------------------------------------------
+# CSS
+# ----------------------------------------------------------------------
 st.markdown(
     """
     <style>
@@ -105,26 +107,17 @@ st.markdown(
     .block-container { padding-top: 1rem; max-width: 1450px; }
     section[data-testid="stSidebar"] { background: #f1f5f9; }
     div[data-testid="stMetric"] {
-        background-color: #f8fafc;
-        padding: 14px;
-        border-radius: 8px;
-        border: 1px solid #d7dce2;
+        background-color: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #d7dce2;
     }
     .hero {
-        border: 1px solid #d7dce2;
-        background: #f8fafc;
-        border-radius: 8px;
-        padding: 18px 20px;
-        margin-bottom: 16px;
+        border: 1px solid #d7dce2; background: #f8fafc; border-radius: 8px;
+        padding: 18px 20px; margin-bottom: 16px;
     }
-    .hero h1 { margin: 0; font-size: 2rem; letter-spacing: 0; color: #111827; }
+    .hero h1 { margin: 0; font-size: 2rem; color: #111827; }
     .hero p { margin: 6px 0 0; color: #475569; }
     .card {
-        border: 1px solid #d7dce2;
-        border-radius: 8px;
-        padding: 14px 16px;
-        margin: 10px 0;
-        background: #ffffff;
+        border: 1px solid #d7dce2; border-radius: 8px; padding: 14px 16px;
+        margin: 10px 0; background: #ffffff;
     }
     .card.good { border-left: 6px solid #16a34a; }
     .card.medium { border-left: 6px solid #eab308; }
@@ -133,22 +126,13 @@ st.markdown(
     .card-title { font-size: 1.08rem; font-weight: 800; margin-bottom: 6px; }
     .muted { color: #64748b; font-size: .88rem; }
     .pill {
-        display: inline-block;
-        padding: 5px 9px;
-        margin: 5px 5px 0 0;
-        border-radius: 6px;
-        background: #eef2f7;
-        border: 1px solid #d7dce2;
-        font-size: .88rem;
+        display: inline-block; padding: 5px 9px; margin: 5px 5px 0 0;
+        border-radius: 6px; background: #eef2f7; border: 1px solid #d7dce2; font-size: .88rem;
     }
     .pill strong { color: #111827; }
     .decision {
-        display: inline-block;
-        padding: 6px 10px;
-        margin: 8px 6px 0 0;
-        border-radius: 6px;
-        color: white;
-        font-weight: 800;
+        display: inline-block; padding: 6px 10px; margin: 8px 6px 0 0;
+        border-radius: 6px; color: white; font-weight: 800;
     }
     .decision.green { background: #16a34a; }
     .decision.amber { background: #ca8a04; }
@@ -157,26 +141,39 @@ st.markdown(
     .red { color: #c92a2a; font-weight: 800; }
     .stButton>button { background-color: #0d6efd; color: white; border-radius: 5px; }
     .live-badge {
-        background: #dc2626;
-        color: white;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-weight: bold;
-        font-size: 0.8rem;
-        margin-left: 8px;
+        background: #dc2626; color: white; padding: 2px 8px; border-radius: 4px;
+        font-weight: bold; font-size: 0.8rem; margin-left: 8px;
     }
     .finisher-name { font-weight: 700; font-size: 1rem; }
     .finisher-prob { color: #2563eb; font-weight: 700; margin-left: 8px; }
+    .team-info {
+        display: flex; align-items: center; gap: 12px; margin-bottom: 6px;
+        font-size: 0.9rem; color: #475569;
+    }
+    .form-badge {
+        display: inline-block; width: 22px; height: 22px; line-height: 22px;
+        text-align: center; border-radius: 4px; font-size: 0.8rem; font-weight: bold;
+        margin-right: 2px;
+    }
+    .form-v { background: #16a34a; color: white; }
+    .form-e { background: #eab308; color: white; }
+    .form-d { background: #dc2626; color: white; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# --- Sessão ---
+# ----------------------------------------------------------------------
+# Inicialização da sessão
+# ----------------------------------------------------------------------
 if "historico" not in st.session_state:
     st.session_state.historico = []
+if "jogo_manual" not in st.session_state:
+    st.session_state.jogo_manual = None
 
-# --- Funções auxiliares ---
+# ----------------------------------------------------------------------
+# Funções auxiliares
+# ----------------------------------------------------------------------
 def hoje():
     return datetime.now().date()
 
@@ -229,11 +226,13 @@ def kelly_stake(prob, odd, banca, fracao=0.25):
     kelly = (b * prob - q) / b
     return max(0.0, kelly * fracao * banca)
 
-# --- API ESPN ---
-def fetch_with_retry(url, params, retries=RETRIES):
+# ----------------------------------------------------------------------
+# API ESPN – placares e classificação
+# ----------------------------------------------------------------------
+def fetch_with_retry(url, params=None, retries=RETRIES):
     for i in range(retries):
         try:
-            resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+            resp = requests.get(url, params=params or {}, headers=HEADERS, timeout=10)
             resp.raise_for_status()
             return resp.json(), ""
         except requests.RequestException as exc:
@@ -247,6 +246,32 @@ def buscar_scoreboard(liga_id, data_iso=None):
     if data_iso:
         params["dates"] = data_iso.replace("-", "")
     return fetch_with_retry(f"{ESPN_BASE}/{liga_id}/scoreboard", params)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def buscar_classificacao(liga_id):
+    url = f"{ESPN_BASE}/{liga_id}/standings"
+    payload, err = fetch_with_retry(url)
+    if err or not payload:
+        return {}
+    tabela = {}
+    try:
+        for group in payload.get("children", []):
+            for entry in group.get("standings", {}).get("entries", []):
+                time_nome = entry.get("team", {}).get("displayName", "")
+                time_nome_limpo = nome_limpo(time_nome)
+                pos = entry.get("stats", [{}])[0].get("value", 99)  # posição normalmente no primeiro stat
+                # A ESPN coloca a posição como valor inteiro
+                if isinstance(pos, (int, float)):
+                    pos = int(pos)
+                else:
+                    pos = 99
+                # Às vezes a posição está no field "rank"
+                if "rank" in entry:
+                    pos = entry["rank"]
+                tabela[time_nome_limpo] = {"posicao": pos, "time_original": time_nome}
+    except Exception:
+        pass
+    return tabela
 
 def extrair_jogos(payload, liga_id):
     jogos = []
@@ -305,7 +330,9 @@ def buscar_periodo(liga_id, dias_passado, dias_futuro):
         vistos[key] = j
     return sorted(vistos.values(), key=lambda x: x.get("data") or datetime.now()), logs
 
-# --- Modelo de força / estatísticas ---
+# ----------------------------------------------------------------------
+# Modelo de força e estatísticas (com ajuste de posição/forma)
+# ----------------------------------------------------------------------
 def forca_inicial(time):
     nt = normalizar(time)
     for nome, valor in FORCA_BASE.items():
@@ -315,7 +342,8 @@ def forca_inicial(time):
     return 1710 + (seed % 140) - 70
 
 def novo_stats():
-    return {"jogos": 0, "gf": 0.0, "ga": 0.0, "home_gf": 0.0, "home_ga": 0.0, "home_j": 0, "away_gf": 0.0, "away_ga": 0.0, "away_j": 0}
+    return {"jogos": 0, "gf": 0.0, "ga": 0.0, "home_gf": 0.0, "home_ga": 0.0, "home_j": 0,
+            "away_gf": 0.0, "away_ga": 0.0, "away_j": 0}
 
 def construir_contexto(jogos):
     encerrados = [j for j in jogos if j.get("completed")]
@@ -377,46 +405,57 @@ def media_time(stats, time, campo, padrao):
         return s["away_ga"] / max(1, s["away_j"])
     return padrao
 
-def matriz_poisson(media_home, media_away):
-    mat, total = [], 0.0
-    for i in range(MAX_GOLS + 1):
-        row = []
-        for j in range(MAX_GOLS + 1):
-            p = poisson_pmf(i, media_home) * poisson_pmf(j, media_away)
-            row.append(p)
-            total += p
-        mat.append(row)
-    return [[p / total for p in row] for row in mat]
+def calcular_forma(jogos, time_normalizado):
+    """ Retorna lista de resultados ('V','E','D') dos últimos 5 jogos encerrados do time. """
+    jogos_time = [j for j in jogos if j.get("completed") and
+                  (normalizar(j["home"]) == time_normalizado or normalizar(j["away"]) == time_normalizado)]
+    jogos_time = sorted(jogos_time, key=lambda x: x.get("data") or datetime.min, reverse=True)[:5]
+    forma = []
+    for j in jogos_time:
+        if normalizar(j["home"]) == time_normalizado:
+            gh, ga = int(j["placar_home"]), int(j["placar_away"])
+        else:
+            ga, gh = int(j["placar_home"]), int(j["placar_away"])
+        if gh > ga:
+            forma.append("V")
+        elif gh == ga:
+            forma.append("E")
+        else:
+            forma.append("D")
+    return forma
 
-def calcular_cartoes_escanteios(media_home, media_away, p_empate, riscos):
-    total_gols = media_home + media_away
-    equilibrio = 1 - abs(media_home - media_away) / max(0.2, total_gols)
-    classico = 0.45 if "classico" in riscos else 0.0
-    cartoes_total = clamp(3.2 + 1.25 * equilibrio + 0.75 * p_empate + classico, 2.4, 7.2)
-    cartoes_home = cartoes_total * clamp(0.49 + 0.06 * (media_away - media_home), 0.38, 0.62)
-    escanteios_total = clamp(7.1 + 1.2 * total_gols + 0.75 * equilibrio, 6.0, 13.5)
-    escanteios_home = escanteios_total * clamp(0.54 + 0.08 * (media_home - media_away), 0.40, 0.68)
-    return {
-        "cartoes_total": cartoes_total,
-        "cartoes_home": cartoes_home,
-        "cartoes_away": cartoes_total - cartoes_home,
-        "over_25_cartoes": prob_over(cartoes_total, 2.5),
-        "over_35_cartoes": prob_over(cartoes_total, 3.5),
-        "over_45_cartoes": prob_over(cartoes_total, 4.5),
-        "escanteios_total": escanteios_total,
-        "escanteios_home": escanteios_home,
-        "escanteios_away": escanteios_total - escanteios_home,
-        "over_75_escanteios": prob_over(escanteios_total, 7.5),
-        "over_85_escanteios": prob_over(escanteios_total, 8.5),
-        "over_95_escanteios": prob_over(escanteios_total, 9.5),
-        "over_105_escanteios": prob_over(escanteios_total, 10.5),
-    }
+def calcular_pontos_forma(forma):
+    """ Pontuação simples: V=3, E=1, D=0. Retorna total e string. """
+    pts = 0
+    for r in forma:
+        if r == "V": pts += 3
+        elif r == "E": pts += 1
+    return pts, " ".join(forma)
 
-def prever_jogo(jogo, contexto, desfalques_home=0, desfalques_away=0, ajuste_home=0, ajuste_away=0):
+def prever_jogo(jogo, contexto, posicoes=None, formas=None, desfalques_home=0, desfalques_away=0, ajuste_home=0, ajuste_away=0):
     home, away = jogo["home"], jogo["away"]
     ratings, stats = contexto["ratings"], contexto["stats"]
     rh = ratings.get(home, forca_inicial(home)) + ajuste_home - desfalques_home * 18
     ra = ratings.get(away, forca_inicial(away)) + ajuste_away - desfalques_away * 18
+
+    # Ajustes por posição e forma (opcional)
+    if posicoes:
+        pos_h = posicoes.get(home, {}).get("posicao", 10)
+        pos_a = posicoes.get(away, {}).get("posicao", 10)
+        # Times mais bem colocados ganham ligeiro bônus
+        bonus_pos_h = max(0, (16 - pos_h)) * 1.5
+        bonus_pos_a = max(0, (16 - pos_a)) * 1.5
+        rh += bonus_pos_h
+        ra += bonus_pos_a
+    if formas:
+        pts_h, _ = calcular_pontos_forma(formas.get(home, []))
+        pts_a, _ = calcular_pontos_forma(formas.get(away, []))
+        # Momento: +1.5 por ponto nos últimos 5 jogos, comparado com a média (7.5)
+        bonus_forma_h = (pts_h - 7.5) * 1.2
+        bonus_forma_a = (pts_a - 7.5) * 1.2
+        rh += bonus_forma_h
+        ra += bonus_forma_a
+
     liga_h = contexto["media_home"] or 1.35
     liga_a = contexto["media_away"] or 1.05
 
@@ -484,7 +523,44 @@ def prever_jogo(jogo, contexto, desfalques_home=0, desfalques_away=0, ajuste_hom
         "riscos": riscos, **extras,
     }
 
-# --- Balanço das últimas 24h (backtest out-of-sample) ---
+def calcular_cartoes_escanteios(media_home, media_away, p_empate, riscos):
+    total_gols = media_home + media_away
+    equilibrio = 1 - abs(media_home - media_away) / max(0.2, total_gols)
+    classico = 0.45 if "classico" in riscos else 0.0
+    cartoes_total = clamp(3.2 + 1.25 * equilibrio + 0.75 * p_empate + classico, 2.4, 7.2)
+    cartoes_home = cartoes_total * clamp(0.49 + 0.06 * (media_away - media_home), 0.38, 0.62)
+    escanteios_total = clamp(7.1 + 1.2 * total_gols + 0.75 * equilibrio, 6.0, 13.5)
+    escanteios_home = escanteios_total * clamp(0.54 + 0.08 * (media_home - media_away), 0.40, 0.68)
+    return {
+        "cartoes_total": cartoes_total,
+        "cartoes_home": cartoes_home,
+        "cartoes_away": cartoes_total - cartoes_home,
+        "over_25_cartoes": prob_over(cartoes_total, 2.5),
+        "over_35_cartoes": prob_over(cartoes_total, 3.5),
+        "over_45_cartoes": prob_over(cartoes_total, 4.5),
+        "escanteios_total": escanteios_total,
+        "escanteios_home": escanteios_home,
+        "escanteios_away": escanteios_total - escanteios_home,
+        "over_75_escanteios": prob_over(escanteios_total, 7.5),
+        "over_85_escanteios": prob_over(escanteios_total, 8.5),
+        "over_95_escanteios": prob_over(escanteios_total, 9.5),
+        "over_105_escanteios": prob_over(escanteios_total, 10.5),
+    }
+
+def matriz_poisson(media_home, media_away):
+    mat, total = [], 0.0
+    for i in range(MAX_GOLS + 1):
+        row = []
+        for j in range(MAX_GOLS + 1):
+            p = poisson_pmf(i, media_home) * poisson_pmf(j, media_away)
+            row.append(p)
+            total += p
+        mat.append(row)
+    return [[p / total for p in row] for row in mat]
+
+# ----------------------------------------------------------------------
+# Balanço 24h
+# ----------------------------------------------------------------------
 def calcular_balanco_24h(jogos):
     agora = datetime.now()
     limite = agora - timedelta(hours=24)
@@ -493,14 +569,7 @@ def calcular_balanco_24h(jogos):
         return []
     todos_encerrados = sorted([j for j in jogos if j.get("completed") and j.get("data")], key=lambda x: x["data"])
     resultados = []
-    ctx = {
-        "ratings": {},
-        "stats": {},
-        "jogos": 0,
-        "media_home": 0.0,
-        "media_away": 0.0,
-        "taxa_empate": 0.0,
-    }
+    ctx = {"ratings": {}, "stats": {}, "jogos": 0, "media_home": 0.0, "media_away": 0.0, "taxa_empate": 0.0}
     encerrados_24h_set = {j["id"] for j in encerrados}
     for jogo in todos_encerrados:
         if jogo["id"] in encerrados_24h_set:
@@ -508,15 +577,11 @@ def calcular_balanco_24h(jogos):
             gols = jogo["placar_home"] + jogo["placar_away"]
             acertos, erros = [], []
             if previsao["over25"] >= 0.5:
-                if gols > 2.5:
-                    acertos.append("Over 2.5 gols")
-                else:
-                    erros.append("Over 2.5 gols")
+                if gols > 2.5: acertos.append("Over 2.5 gols")
+                else: erros.append("Over 2.5 gols")
             else:
-                if gols <= 2.5:
-                    acertos.append("Under 2.5 gols")
-                else:
-                    erros.append("Under 2.5 gols")
+                if gols <= 2.5: acertos.append("Under 2.5 gols")
+                else: erros.append("Under 2.5 gols")
             resultados.append({
                 "jogo": f"{jogo['home']} {jogo['placar_home']} x {jogo['placar_away']} {jogo['away']}",
                 "gols": gols,
@@ -524,7 +589,6 @@ def calcular_balanco_24h(jogos):
                 "acertos": acertos,
                 "erros": erros,
             })
-        # Atualiza contexto incremental
         home, away = jogo["home"], jogo["away"]
         gh, ga = int(jogo["placar_home"]), int(jogo["placar_away"])
         ctx["ratings"].setdefault(home, forca_inicial(home))
@@ -557,13 +621,48 @@ def calcular_balanco_24h(jogos):
             ctx["taxa_empate"] = empates / ctx["jogos"]
     return resultados
 
-# --- Renderização ---
-def criar_jogo_manual(home, away):
-    return {"id": "manual", "home": nome_limpo(home), "away": nome_limpo(away), "data_txt": "Manual", "status": "análise manual", "completed": False, "live": False, "placar_home": 0, "placar_away": 0}
+# ----------------------------------------------------------------------
+# Renderização
+# ----------------------------------------------------------------------
+def obter_finalizadores(time_nome):
+    nt = normalizar(time_nome)
+    return JOGADORES.get(nt, [])
 
-def render_card(jogo, r):
-    mapa = {"Casa": jogo["home"], "Fora": jogo["away"], "Empate": "Empate"}
-    riscos = ", ".join(r["riscos"]) if r["riscos"] else "baixo risco"
+def criar_jogo_manual(home, away):
+    return {"id": "manual", "home": nome_limpo(home), "away": nome_limpo(away), "data_txt": "Manual",
+            "status": "análise manual", "completed": False, "live": False, "placar_home": 0, "placar_away": 0}
+
+def render_forma_bar(forma_lista):
+    html = ""
+    for r in forma_lista:
+        cls = "form-v" if r == "V" else ("form-e" if r == "E" else "form-d")
+        html += f"<span class='form-badge {cls}'>{r}</span>"
+    return html
+
+def render_card(jogo, r, posicoes, formas):
+    home, away = jogo["home"], jogo["away"]
+    pos_h = posicoes.get(home, {}).get("posicao", "?")
+    pos_a = posicoes.get(away, {}).get("posicao", "?")
+    forma_h = formas.get(home, [])
+    forma_a = formas.get(away, [])
+
+    # Determinar tendência (últimos 3 jogos)
+    pts_h, _ = calcular_pontos_forma(forma_h[:3])
+    pts_a, _ = calcular_pontos_forma(forma_a[:3])
+    tendencia_h = "⬆️" if pts_h >= 6 else ("⬇️" if pts_h <= 1 else "➡️")
+    tendencia_a = "⬆️" if pts_a >= 6 else ("⬇️" if pts_a <= 1 else "➡️")
+
+    info_extra = f"""
+    <div class="team-info">
+        <span>🏠 {home}: {pos_h}º {tendencia_h}</span>
+        <span>{render_forma_bar(forma_h)}</span>
+    </div>
+    <div class="team-info">
+        <span>🏟️ {away}: {pos_a}º {tendencia_a}</span>
+        <span>{render_forma_bar(forma_a)}</span>
+    </div>
+    """
+
     live = jogo.get("live", False)
     card_class = f"{r['classe']} live" if live else r["classe"]
     if live:
@@ -572,14 +671,17 @@ def render_card(jogo, r):
         placar = f" - {jogo['placar_home']} x {jogo['placar_away']} (encerrado)"
     else:
         placar = ""
+    mapa = {"Casa": home, "Fora": away, "Empate": "Empate"}
+    riscos = ", ".join(r["riscos"]) if r["riscos"] else "baixo risco"
     st.markdown(
         f"""
         <div class="card {card_class}">
-            <div class="card-title">{jogo['home']} x {jogo['away']}{placar}</div>
+            <div class="card-title">{home} x {away}{placar}</div>
+            {info_extra}
             <div class="muted">{jogo.get('data_txt', '')} | {jogo.get('status', '')}</div>
-            <span class="pill">Vitória {jogo['home']}: <strong>{pct(r['p_h'])}</strong></span>
+            <span class="pill">Vitória {home}: <strong>{pct(r['p_h'])}</strong></span>
             <span class="pill">Empate: <strong>{pct(r['p_d'])}</strong></span>
-            <span class="pill">Vitória {jogo['away']}: <strong>{pct(r['p_a'])}</strong></span>
+            <span class="pill">Vitória {away}: <strong>{pct(r['p_a'])}</strong></span>
             <br>
             <span class="pill">Palpite: <strong>{mapa[r['palpite']]}</strong></span>
             <span class="pill">Probabilidade: <strong>{pct(r['prob_palpite'])}</strong></span>
@@ -604,16 +706,17 @@ def render_card(jogo, r):
         """,
         unsafe_allow_html=True,
     )
+    # Finalizadores
     if not jogo.get("completed"):
-        finalizadores_home = obter_finalizadores(jogo["home"])
-        finalizadores_away = obter_finalizadores(jogo["away"])
+        finalizadores_home = obter_finalizadores(home)
+        finalizadores_away = obter_finalizadores(away)
         if finalizadores_home or finalizadores_away:
-            with st.expander(f"⚽ Prováveis finalizadores em {jogo['home']} x {jogo['away']}"):
+            with st.expander(f"⚽ Prováveis finalizadores em {home} x {away}"):
                 col1, col2 = st.columns(2)
                 p_gol_home = 1 - poisson_pmf(0, r["lam_h"])
                 p_gol_away = 1 - poisson_pmf(0, r["lam_a"])
                 with col1:
-                    st.markdown(f"**{jogo['home']}** (prob. de gol: {pct(p_gol_home)})")
+                    st.markdown(f"**{home}** (prob. de gol: {pct(p_gol_home)})")
                     if finalizadores_home:
                         for nome, peso in finalizadores_home:
                             prob_jogador = p_gol_home * peso
@@ -621,7 +724,7 @@ def render_card(jogo, r):
                     else:
                         st.write("Sem dados de finalizadores")
                 with col2:
-                    st.markdown(f"**{jogo['away']}** (prob. de gol: {pct(p_gol_away)})")
+                    st.markdown(f"**{away}** (prob. de gol: {pct(p_gol_away)})")
                     if finalizadores_away:
                         for nome, peso in finalizadores_away:
                             prob_jogador = p_gol_away * peso
@@ -645,9 +748,11 @@ def render_value_box(titulo, prob, odd, banca):
         unsafe_allow_html=True,
     )
 
-# --- Interface principal ---
+# ----------------------------------------------------------------------
+# Interface principal
+# ----------------------------------------------------------------------
 def main():
-    st.markdown('<div class="hero"><h1>⚽ Analisador Esportivo Pro 10.2</h1><p>Probabilidades, mercados de gols, cartões e escanteios com inteligência estatística.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero"><h1>⚽ Analisador Esportivo Pro 10.3</h1><p>Com odds manuais, posição na liga e forma recente (dados gratuitos ESPN).</p></div>', unsafe_allow_html=True)
 
     with st.sidebar:
         st.header("Configuração")
@@ -672,27 +777,41 @@ def main():
                 submitted = st.form_submit_button("Adicionar")
                 if submitted and home and away:
                     jogo_manual = criar_jogo_manual(home, away)
-                    st.session_state["jogo_manual"] = (jogo_manual, desf_home, desf_away)
+                    st.session_state.jogo_manual = (jogo_manual, desf_home, desf_away)
 
         st.markdown("---")
-        st.subheader("Avaliação de valor (odds reais)")
+        st.subheader("Odds manuais (copie da casa de apostas)")
         odd_input = st.text_input("Odd do palpite (ex: 2.10)")
         banca = st.number_input("Banca (R$)", 0.0, 100000.0, 1000.0, step=100.0)
 
-    with st.spinner("Buscando jogos e calculando previsões..."):
+    # Carregar dados
+    with st.spinner("Buscando jogos, classificação e calculando previsões..."):
         jogos, logs = buscar_periodo(liga_id, dias_passado, dias_futuro)
         contexto = construir_contexto(jogos)
+
+        # Classificação
+        classif = buscar_classificacao(liga_id)
+
+        # Calcular forma de cada time (últimos 5 jogos)
+        formas = {}
+        for j in jogos:
+            for time in [j["home"], j["away"]]:
+                tn = normalizar(time)
+                if tn not in formas:
+                    formas[tn] = calcular_forma(jogos, tn)
 
         todos_jogos = []
         for j in jogos:
             if not j.get("completed") or j.get("live"):
                 desf_h, desf_a = 0, 0
-                previsao = prever_jogo(j, contexto, desf_h, desf_a)
+                previsao = prever_jogo(j, contexto, posicoes=classif, formas=formas,
+                                       desfalques_home=desf_h, desfalques_away=desf_a)
                 todos_jogos.append((j, previsao))
 
-        if "jogo_manual" in st.session_state:
-            mj, mh, ma = st.session_state["jogo_manual"]
-            previsao_m = prever_jogo(mj, contexto, mh, ma)
+        if st.session_state.jogo_manual:
+            mj, mh, ma = st.session_state.jogo_manual
+            previsao_m = prever_jogo(mj, contexto, posicoes=classif, formas=formas,
+                                     desfalques_home=mh, desfalques_away=ma)
             todos_jogos.append((mj, previsao_m))
 
         if mostrar_ao_vivo:
@@ -715,7 +834,7 @@ def main():
         return
 
     for jogo, prev in todos_jogos:
-        render_card(jogo, prev)
+        render_card(jogo, prev, classif, formas)
         try:
             odd = float(odd_input) if odd_input else 0
         except:
@@ -732,11 +851,11 @@ def main():
                 mercado = "Empate"
             render_value_box(f"{mercado} (Palpite)", prob, odd, banca)
 
-    # --- Balanço 24h ---
+    # Balanço 24h
     st.header("📈 Balanço das últimas 24h")
     resultados_balanco = calcular_balanco_24h(jogos)
     if not resultados_balanco:
-        st.info("Nenhum jogo encerrado nas últimas 24 horas para avaliar.")
+        st.info("Nenhum jogo encerrado nas últimas 24h.")
     else:
         total_acertos = sum(len(r["acertos"]) for r in resultados_balanco)
         total_erros = sum(len(r["erros"]) for r in resultados_balanco)
@@ -747,9 +866,9 @@ def main():
             resultado = "✔ Acertou" if (previsao == "Over" and r["gols"] > 2.5) or (previsao == "Under" and r["gols"] <= 2.5) else "✘ Errou"
             table += f"| {r['jogo']} | {r['gols']} | {previsao} ({pct(r['previsao_over25'])}) | {resultado} |\n"
         st.markdown(table)
-        st.caption("Escanteios e cartões: dados reais indisponíveis na API gratuita. Para ter o balanço completo, é necessário integrar uma API com estatísticas de partida.")
+        st.caption("Dados de escanteios e cartões indisponíveis gratuitamente.")
 
-    # Tabela resumo de cartões e escanteios
+    # Tabela resumo
     st.subheader("📋 Resumo – Cartões e Escanteios")
     df = pd.DataFrame([{
         "Jogo": f"{j['home']} x {j['away']}",
