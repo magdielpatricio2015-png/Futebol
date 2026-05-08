@@ -7,7 +7,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-
+# --- Configuração da página ---
 st.set_page_config(
     page_title="Analisador Esportivo Pro 10.2",
     page_icon="AE",
@@ -15,20 +15,21 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-
+# --- Constantes ---
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 HEADERS = {"User-Agent": "AnalisadorEsportivoPro/10.2"}
 MAX_GOLS = 10
+RETRIES = 2
 
 LIGAS = {
-    "Brasileirao Serie A": "bra.1",
-    "Brasileirao Serie B": "bra.2",
+    "Brasileirão Série A": "bra.1",
+    "Brasileirão Série B": "bra.2",
     "Copa do Brasil": "bra.copa_do_brasil",
     "Libertadores": "conmebol.libertadores",
     "Sul-Americana": "conmebol.sudamericana",
     "Premier League": "eng.1",
     "La Liga": "esp.1",
-    "Serie A Italia": "ita.1",
+    "Serie A (Itália)": "ita.1",
     "Bundesliga": "ger.1",
     "Ligue 1": "fra.1",
     "Champions League": "uefa.champions",
@@ -75,7 +76,7 @@ CLASSICOS = {
     tuple(sorted(["inter milan", "milan"])),
 }
 
-
+# --- CSS personalizado ---
 st.markdown(
     """
     <style>
@@ -139,18 +140,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
+# --- Sessão ---
 if "historico" not in st.session_state:
     st.session_state.historico = []
 
-
+# --- Funções auxiliares ---
 def hoje():
     return datetime.now().date()
 
-
 def nome_limpo(nome):
     return " ".join(str(nome or "").strip().split())
-
 
 def normalizar(nome):
     nome = nome_limpo(nome).lower()
@@ -161,42 +160,34 @@ def normalizar(nome):
     nome = re.sub(r"\s+", " ", nome).strip()
     return ALIASES.get(nome, nome)
 
-
 def parse_dt(valor):
     if not valor:
         return None
     try:
         return datetime.fromisoformat(valor.replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
-    except ValueError:
+    except:
         return None
-
 
 def pct(x):
     return f"{100 * float(x):.1f}%"
 
-
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
-
 
 def poisson_pmf(k, media):
     media = max(0.03, float(media))
     return math.exp(-media) * (media ** k) / math.factorial(k)
 
-
 def prob_over(media, linha):
     corte = int(math.floor(linha))
     return clamp(1 - sum(poisson_pmf(k, media) for k in range(corte + 1)), 0.0, 1.0)
-
 
 def odd_justa(prob):
     prob = clamp(prob, 0.0001, 0.9999)
     return 1 / prob
 
-
 def valor_esperado(prob, odd):
     return prob * odd - 1 if odd > 1 else 0
-
 
 def kelly_stake(prob, odd, banca, fracao=0.25):
     if odd <= 1 or banca <= 0:
@@ -206,19 +197,24 @@ def kelly_stake(prob, odd, banca, fracao=0.25):
     kelly = (b * prob - q) / b
     return max(0.0, kelly * fracao * banca)
 
+# --- API ESPN ---
+def fetch_with_retry(url, params, retries=RETRIES):
+    for i in range(retries):
+        try:
+            resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+            resp.raise_for_status()
+            return resp.json(), ""
+        except requests.RequestException as exc:
+            if i == retries - 1:
+                return {}, f"Erro ESPN: {exc}"
+    return {}, ""
 
 @st.cache_data(ttl=240, show_spinner=False)
 def buscar_scoreboard(liga_id, data_iso=None):
     params = {"limit": 300}
     if data_iso:
         params["dates"] = data_iso.replace("-", "")
-    try:
-        resp = requests.get(f"{ESPN_BASE}/{liga_id}/scoreboard", params=params, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        return resp.json(), ""
-    except requests.RequestException as exc:
-        return {}, f"Erro ESPN: {exc}"
-
+    return fetch_with_retry(f"{ESPN_BASE}/{liga_id}/scoreboard", params)
 
 def extrair_jogos(payload, liga_id):
     jogos = []
@@ -237,7 +233,7 @@ def extrair_jogos(payload, liga_id):
         def placar(c):
             try:
                 return int(c.get("score", 0))
-            except (TypeError, ValueError):
+            except:
                 return 0
 
         dt = parse_dt(event.get("date"))
@@ -259,7 +255,6 @@ def extrair_jogos(payload, liga_id):
         })
     return jogos
 
-
 @st.cache_data(ttl=900, show_spinner=False)
 def buscar_periodo(liga_id, dias_passado, dias_futuro):
     jogos, logs = [], []
@@ -278,7 +273,7 @@ def buscar_periodo(liga_id, dias_passado, dias_futuro):
         vistos[key] = j
     return sorted(vistos.values(), key=lambda x: x.get("data") or datetime.now()), logs
 
-
+# --- Modelo de força / estatísticas ---
 def forca_inicial(time):
     nt = normalizar(time)
     for nome, valor in FORCA_BASE.items():
@@ -287,10 +282,8 @@ def forca_inicial(time):
     seed = sum(ord(c) for c in nome_limpo(time))
     return 1710 + (seed % 140) - 70
 
-
 def novo_stats():
     return {"jogos": 0, "gf": 0.0, "ga": 0.0, "home_gf": 0.0, "home_ga": 0.0, "home_j": 0, "away_gf": 0.0, "away_ga": 0.0, "away_j": 0}
-
 
 def construir_contexto(jogos):
     encerrados = [j for j in jogos if j.get("completed")]
@@ -338,7 +331,6 @@ def construir_contexto(jogos):
         "taxa_empate": empates / max(1, n),
     }
 
-
 def media_time(stats, time, campo, padrao):
     s = stats.get(time)
     if not s:
@@ -353,7 +345,6 @@ def media_time(stats, time, campo, padrao):
         return s["away_ga"] / max(1, s["away_j"])
     return padrao
 
-
 def matriz_poisson(media_home, media_away):
     mat, total = [], 0.0
     for i in range(MAX_GOLS + 1):
@@ -364,7 +355,6 @@ def matriz_poisson(media_home, media_away):
             total += p
         mat.append(row)
     return [[p / total for p in row] for row in mat]
-
 
 def calcular_cartoes_escanteios(media_home, media_away, p_empate, riscos):
     total_gols = media_home + media_away
@@ -389,7 +379,6 @@ def calcular_cartoes_escanteios(media_home, media_away, p_empate, riscos):
         "over_95_escanteios": prob_over(escanteios_total, 9.5),
         "over_105_escanteios": prob_over(escanteios_total, 10.5),
     }
-
 
 def prever_jogo(jogo, contexto, desfalques_home=0, desfalques_away=0, ajuste_home=0, ajuste_away=0):
     home, away = jogo["home"], jogo["away"]
@@ -429,7 +418,7 @@ def prever_jogo(jogo, contexto, desfalques_home=0, desfalques_away=0, ajuste_hom
     if amostra < 10:
         riscos.append("baixa amostra")
     if abs(p_h - p_a) < 0.08:
-        riscos.append("forcas proximas")
+        riscos.append("forças próximas")
     if desfalques_home or desfalques_away:
         riscos.append(f"desfalques {home}:{desfalques_home} {away}:{desfalques_away}")
 
@@ -463,10 +452,9 @@ def prever_jogo(jogo, contexto, desfalques_home=0, desfalques_away=0, ajuste_hom
         "riscos": riscos, **extras,
     }
 
-
+# --- Renderização ---
 def criar_jogo_manual(home, away):
-    return {"id": "manual", "home": nome_limpo(home), "away": nome_limpo(away), "data_txt": "Manual", "status": "analise manual", "completed": False, "live": False, "placar_home": 0, "placar_away": 0}
-
+    return {"id": "manual", "home": nome_limpo(home), "away": nome_limpo(away), "data_txt": "Manual", "status": "análise manual", "completed": False, "live": False, "placar_home": 0, "placar_away": 0}
 
 def render_card(jogo, r):
     mapa = {"Casa": jogo["home"], "Fora": jogo["away"], "Empate": "Empate"}
@@ -477,20 +465,20 @@ def render_card(jogo, r):
         <div class="card {r['classe']}">
             <div class="card-title">{jogo['home']} x {jogo['away']}{placar}</div>
             <div class="muted">{jogo.get('data_txt', '')} | {jogo.get('status', '')}</div>
-            <span class="pill">Vitoria {jogo['home']}: <strong>{pct(r['p_h'])}</strong></span>
+            <span class="pill">Vitória {jogo['home']}: <strong>{pct(r['p_h'])}</strong></span>
             <span class="pill">Empate: <strong>{pct(r['p_d'])}</strong></span>
-            <span class="pill">Vitoria {jogo['away']}: <strong>{pct(r['p_a'])}</strong></span>
+            <span class="pill">Vitória {jogo['away']}: <strong>{pct(r['p_a'])}</strong></span>
             <br>
             <span class="pill">Palpite: <strong>{mapa[r['palpite']]}</strong></span>
             <span class="pill">Probabilidade: <strong>{pct(r['prob_palpite'])}</strong></span>
             <span class="pill">Melhor mercado: <strong>{r['melhor_mercado']} {pct(r['melhor_prob'])}</strong></span>
-            <span class="pill">Placar provavel: <strong>{r['placares'][0][1]}x{r['placares'][0][2]}</strong></span>
+            <span class="pill">Placar provável: <strong>{r['placares'][0][1]}x{r['placares'][0][2]}</strong></span>
             <span class="pill">Gols esp.: <strong>{r['lam_h']:.2f} x {r['lam_a']:.2f}</strong></span>
             <br>
-            <span class="pill">Cartoes esp.: <strong>{r['cartoes_total']:.1f}</strong></span>
-            <span class="pill">Over 2.5 cartoes: <strong>{pct(r['over_25_cartoes'])}</strong></span>
-            <span class="pill">Over 3.5 cartoes: <strong>{pct(r['over_35_cartoes'])}</strong></span>
-            <span class="pill">Over 4.5 cartoes: <strong>{pct(r['over_45_cartoes'])}</strong></span>
+            <span class="pill">Cartões esp.: <strong>{r['cartoes_total']:.1f}</strong></span>
+            <span class="pill">Over 2.5 cartões: <strong>{pct(r['over_25_cartoes'])}</strong></span>
+            <span class="pill">Over 3.5 cartões: <strong>{pct(r['over_35_cartoes'])}</strong></span>
+            <span class="pill">Over 4.5 cartões: <strong>{pct(r['over_45_cartoes'])}</strong></span>
             <br>
             <span class="pill">Escanteios esp.: <strong>{r['escanteios_total']:.1f}</strong></span>
             <span class="pill">Over 7.5 esc.: <strong>{pct(r['over_75_escanteios'])}</strong></span>
@@ -505,253 +493,141 @@ def render_card(jogo, r):
         unsafe_allow_html=True,
     )
 
+def render_value_box(titulo, prob, odd, banca):
+    ev = valor_esperado(prob, odd)
+    stake = kelly_stake(prob, odd, banca)
+    color = "#16a34a" if ev > 0 else "#dc2626"
+    st.markdown(
+        f"""
+        <div style="border:1px solid #d7dce2; border-radius:8px; padding:10px; margin:5px 0; background:#f8fafc;">
+            <strong>{titulo}</strong><br>
+            <span>Probabilidade: {pct(prob)} | Odd informada: {odd:.2f} | Odd justa: {odd_justa(prob):.2f}</span><br>
+            <span style="color:{color}; font-weight:bold;">EV: {ev:+.2f}</span> |
+            <span>Stake sugerido (Kelly 25%): R$ {stake:.2f}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-def tabela_cartoes_escanteios(previsoes):
-    return pd.DataFrame([{
+# --- Interface principal ---
+def main():
+    st.markdown('<div class="hero"><h1>⚽ Analisador Esportivo Pro 10.2</h1><p>Probabilidades, mercados de gols, cartões e escanteios com inteligência estatística.</p></div>', unsafe_allow_html=True)
+
+    with st.sidebar:
+        st.header("Configuração")
+        liga_nome = st.selectbox("Liga", list(LIGAS.keys()))
+        liga_id = LIGAS[liga_nome]
+
+        col1, col2 = st.columns(2)
+        with col1:
+            dias_passado = st.slider("Dias passados", 0, 30, 10)
+        with col2:
+            dias_futuro = st.slider("Dias futuros", 0, 7, 3)
+
+        modo_manual = st.checkbox("Adicionar jogo manual")
+        if modo_manual:
+            with st.form("manual_form"):
+                home = st.text_input("Time da casa")
+                away = st.text_input("Time visitante")
+                desf_home = st.number_input("Desfalques casa", 0, 5, 0)
+                desf_away = st.number_input("Desfalques fora", 0, 5, 0)
+                submitted = st.form_submit_button("Adicionar")
+                if submitted and home and away:
+                    jogo_manual = criar_jogo_manual(home, away)
+                    st.session_state["jogo_manual"] = (jogo_manual, desf_home, desf_away)
+
+        st.markdown("---")
+        st.subheader("Avaliação de valor (odds reais)")
+        odd_input = st.text_input("Odd do palpite (ex: 2.10)")
+        banca = st.number_input("Banca (R$)", 0.0, 100000.0, 1000.0, step=100.0)
+
+    # Carregar jogos
+    with st.spinner("Buscando jogos e calculando previsões..."):
+        jogos, logs = buscar_periodo(liga_id, dias_passado, dias_futuro)
+        contexto = construir_contexto(jogos)
+
+        todos_jogos = []
+        for j in jogos:
+            if not j.get("completed") or j.get("live"):
+                desf_h, desf_a = 0, 0
+                previsao = prever_jogo(j, contexto, desf_h, desf_a)
+                todos_jogos.append((j, previsao))
+
+        # Incluir jogo manual (se existir)
+        if "jogo_manual" in st.session_state:
+            mj, mh, ma = st.session_state["jogo_manual"]
+            # Montar contexto com os jogos já carregados + manual (mesmo contexto)
+            # Nota: o jogo manual não afeta o contexto, apenas usamos o mesmo contexto
+            previsao_m = prever_jogo(mj, contexto, mh, ma)
+            todos_jogos.append((mj, previsao_m))
+
+        # Ordenar por data (manuais no fim)
+        todos_jogos.sort(key=lambda x: x[0].get("data") or datetime.max)
+
+    st.header(f"📊 Análises – {liga_nome} ({len(todos_jogos)} jogos)")
+    if logs:
+        with st.expander("Logs de erros na API"):
+            for log in logs:
+                st.warning(log)
+
+    if not todos_jogos:
+        st.info("Nenhum jogo encontrado no período selecionado.")
+        return
+
+    # Exibir cards
+    for jogo, prev in todos_jogos:
+        render_card(jogo, prev)
+
+        # Caixa de valor se odds informadas
+        try:
+            odd = float(odd_input) if odd_input else 0
+        except:
+            odd = 0
+        if odd > 0:
+            # Aplicar ao palpite principal
+            if prev["palpite"] == "Casa":
+                prob = prev["p_h"]
+                mercado = f"Vitória {jogo['home']}"
+            elif prev["palpite"] == "Fora":
+                prob = prev["p_a"]
+                mercado = f"Vitória {jogo['away']}"
+            else:
+                prob = prev["p_d"]
+                mercado = "Empate"
+            render_value_box(f"{mercado} (Palpite)", prob, odd, banca)
+
+    # Tabela resumo de cartões e escanteios
+    st.subheader("📋 Resumo – Cartões e Escanteios")
+    df = pd.DataFrame([{
         "Jogo": f"{j['home']} x {j['away']}",
-        "Cartoes esp.": round(r["cartoes_total"], 1),
-        "Over 2.5 cartoes": pct(r["over_25_cartoes"]),
-        "Over 3.5 cartoes": pct(r["over_35_cartoes"]),
-        "Over 4.5 cartoes": pct(r["over_45_cartoes"]),
+        "Cartões esp.": round(r["cartoes_total"], 1),
+        "Over 2.5 cartões": pct(r["over_25_cartoes"]),
+        "Over 3.5 cartões": pct(r["over_35_cartoes"]),
+        "Over 4.5 cartões": pct(r["over_45_cartoes"]),
         "Escanteios esp.": round(r["escanteios_total"], 1),
         "Over 7.5 esc.": pct(r["over_75_escanteios"]),
         "Over 8.5 esc.": pct(r["over_85_escanteios"]),
         "Over 9.5 esc.": pct(r["over_95_escanteios"]),
         "Over 10.5 esc.": pct(r["over_105_escanteios"]),
-    } for j, r in previsoes])
+    } for j, r in todos_jogos])
+    st.dataframe(df, use_container_width=True)
 
+    # Histórico
+    st.session_state.historico.extend(todos_jogos)
+    st.subheader("📜 Histórico da sessão")
+    hist_df = pd.DataFrame([{
+        "Data": j.get("data_txt"),
+        "Jogo": f"{j['home']} x {j['away']}",
+        "Palpite": mapa_palpite(j, r),
+        "Prob.": pct(r["prob_palpite"]),
+        "Score": r["score"],
+        "Decisão": r["decisao"],
+    } for j, r in st.session_state.historico])
+    st.dataframe(hist_df.tail(20), use_container_width=True)
 
-def render_value_box(titulo, prob, odd, banca):
-    ev = valor_esperado(prob, odd)
-    stake = kelly_stake(prob, odd, banca)
-    color = "green" if ev > 0 else "red"
-    st.markdown(f"**{titulo}**")
-    st.write(f"Probabilidade: **{pct(prob)}**")
-    st.write(f"Odd justa: **{odd_justa(prob):.2f}**")
-    st.markdown(f"EV: <span class='{color}'>{ev:+.2%}</span>", unsafe_allow_html=True)
-    st.write(f"Stake Kelly 25%: **R$ {stake:.2f}**")
+def mapa_palpite(jogo, pred):
+    mp = {"Casa": jogo["home"], "Fora": jogo["away"], "Empate": "Empate"}
+    return mp.get(pred["palpite"], pred["palpite"])
 
-
-def resultado_real(j):
-    if int(j["placar_home"]) > int(j["placar_away"]):
-        return "Casa"
-    if int(j["placar_home"]) < int(j["placar_away"]):
-        return "Fora"
-    return "Empate"
-
-
-def avaliar_ultimas_horas(jogos, horas=36):
-    agora = datetime.now()
-    limite = agora - timedelta(hours=horas)
-    encerrados = [j for j in jogos if j.get("completed") and j.get("data")]
-    encerrados = sorted(encerrados, key=lambda x: x["data"])
-    recentes = [j for j in encerrados if limite <= j["data"] <= agora]
-    rows = []
-    for jogo in recentes:
-        anteriores = [x for x in encerrados if x["data"] < jogo["data"]]
-        if len(anteriores) < 8:
-            continue
-        ctx = construir_contexto(anteriores)
-        prev = prever_jogo(jogo, ctx)
-        real = resultado_real(jogo)
-        gols = int(jogo["placar_home"]) + int(jogo["placar_away"])
-        btts_real = int(jogo["placar_home"]) > 0 and int(jogo["placar_away"]) > 0
-        rows.append({
-            "Data": jogo["data_txt"],
-            "Jogo": f"{jogo['home']} {jogo['placar_home']} x {jogo['placar_away']} {jogo['away']}",
-            "Previsto 1X2": {"Casa": jogo["home"], "Fora": jogo["away"], "Empate": "Empate"}[prev["palpite"]],
-            "Real 1X2": {"Casa": jogo["home"], "Fora": jogo["away"], "Empate": "Empate"}[real],
-            "1X2": "acerto" if prev["palpite"] == real else "erro",
-            "Over 1.5": "acerto" if (prev["over15"] >= 0.55) == (gols >= 2) else "erro",
-            "Over 2.5": "acerto" if (prev["over25"] >= 0.55) == (gols >= 3) else "erro",
-            "Ambas": "acerto" if (prev["btts"] >= 0.55) == btts_real else "erro",
-            "Prob. casa": pct(prev["p_h"]),
-            "Prob. empate": pct(prev["p_d"]),
-            "Prob. fora": pct(prev["p_a"]),
-        })
-    return rows
-
-
-def prob_tenis_manual(forma1, forma2, sup1, sup2, h2h1, h2h2, rating1, rating2):
-    elo = 1 / (1 + 10 ** ((rating2 - rating1) / 400))
-    forma_total = max(1, forma1 + forma2)
-    sup_total = max(1, sup1 + sup2)
-    h2h_total = max(1, h2h1 + h2h2)
-    p1 = 0.42 * (forma1 / forma_total) + 0.28 * (sup1 / sup_total) + 0.20 * elo + 0.10 * (h2h1 / h2h_total)
-    return clamp(p1, 0.05, 0.95), clamp(1 - p1, 0.05, 0.95)
-
-
-st.markdown(
-    """
-    <div class="hero">
-        <h1>AE Analisador Esportivo Pro 10.2</h1>
-        <p>Futebol e tenis com ESPN gratis, Poisson, Elo, desfalques, cartoes, escanteios, Kelly e diagnostico.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-with st.sidebar:
-    menu = st.radio("Navegacao", ["Analise por Liga", "Melhores oportunidades", "Jogos ao Vivo", "Tenis", "Performance 36h", "Gestao de Banca"])
-    st.divider()
-    banca_usuario = st.number_input("Banca para stake (R$)", min_value=0.0, value=1000.0, step=50.0)
-    liga_sel = st.selectbox("Liga", list(LIGAS.keys()))
-    dias_hist = st.slider("Historico do modelo", 30, 180, 90, step=15)
-    dias_fut = st.slider("Proximos dias", 0, 14, 7)
-    if st.button("Atualizar dados"):
-        st.cache_data.clear()
-        st.rerun()
-    st.divider()
-    st.write("Versao 10.2 - gratis")
-
-liga_id = LIGAS[liga_sel]
-with st.spinner("Carregando dados gratis da ESPN..."):
-    jogos_periodo, logs = buscar_periodo(liga_id, dias_hist, dias_fut)
-contexto = construir_contexto(jogos_periodo)
-previsoes = [(j, prever_jogo(j, contexto)) for j in jogos_periodo if not j.get("completed")]
-
-
-if menu == "Analise por Liga":
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Jogos encontrados", len(jogos_periodo))
-    c2.metric("Base do modelo", contexto["jogos"])
-    c3.metric("Media casa", f"{contexto['media_home']:.2f}")
-    c4.metric("Media fora", f"{contexto['media_away']:.2f}")
-    if logs:
-        with st.expander("Avisos"):
-            for log in logs[:8]:
-                st.write(log)
-
-    jogos_futuros = [j for j in jogos_periodo if not j.get("completed")]
-    if not jogos_futuros:
-        st.warning("Nenhum jogo futuro encontrado. Use a analise manual abaixo.")
-    else:
-        escolhido = st.selectbox("Selecione o jogo", [f"{j['home']} x {j['away']} ({j['status']})" for j in jogos_futuros])
-        jogo = next(j for j in jogos_futuros if f"{j['home']} x {j['away']} ({j['status']})" == escolhido)
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            des_h = st.slider(f"Desfalques importantes {jogo['home']}", 0, 6, 0)
-            des_a = st.slider(f"Desfalques importantes {jogo['away']}", 0, 6, 0)
-        with d2:
-            odd_h = st.number_input(f"Odd {jogo['home']}", 1.01, 50.0, 2.0, step=0.05)
-            odd_d = st.number_input("Odd Empate", 1.01, 50.0, 3.2, step=0.05)
-            odd_a = st.number_input(f"Odd {jogo['away']}", 1.01, 50.0, 3.5, step=0.05)
-        with d3:
-            aj_h = st.slider(f"Ajuste tecnico {jogo['home']}", -30, 30, 0)
-            aj_a = st.slider(f"Ajuste tecnico {jogo['away']}", -30, 30, 0)
-        r = prever_jogo(jogo, contexto, des_h, des_a, aj_h, aj_a)
-        render_card(jogo, r)
-        st.subheader("Cartoes e escanteios - probabilidades")
-        st.dataframe(tabela_cartoes_escanteios([(jogo, r)]), use_container_width=True, hide_index=True)
-        v1, v2, v3 = st.columns(3)
-        with v1:
-            render_value_box(jogo["home"], r["p_h"], odd_h, banca_usuario)
-        with v2:
-            render_value_box("Empate", r["p_d"], odd_d, banca_usuario)
-        with v3:
-            render_value_box(jogo["away"], r["p_a"], odd_a, banca_usuario)
-
-    with st.expander("Analise manual de futebol"):
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            mh = st.text_input("Time da casa", "Flamengo")
-            ma = st.text_input("Time visitante", "Palmeiras")
-        with m2:
-            des_mh = st.slider("Desfalques casa", 0, 6, 0)
-            des_ma = st.slider("Desfalques fora", 0, 6, 0)
-        with m3:
-            oh = st.number_input("Odd casa manual", 1.01, 50.0, 2.0, step=0.05)
-            od = st.number_input("Odd empate manual", 1.01, 50.0, 3.2, step=0.05)
-            oa = st.number_input("Odd fora manual", 1.01, 50.0, 3.5, step=0.05)
-        jogo_m = criar_jogo_manual(mh, ma)
-        rm = prever_jogo(jogo_m, contexto, des_mh, des_ma)
-        render_card(jogo_m, rm)
-        st.dataframe(tabela_cartoes_escanteios([(jogo_m, rm)]), use_container_width=True, hide_index=True)
-        x1, x2, x3 = st.columns(3)
-        with x1:
-            render_value_box(jogo_m["home"], rm["p_h"], oh, banca_usuario)
-        with x2:
-            render_value_box("Empate", rm["p_d"], od, banca_usuario)
-        with x3:
-            render_value_box(jogo_m["away"], rm["p_a"], oa, banca_usuario)
-
-
-elif menu == "Melhores oportunidades":
-    st.subheader("Melhores oportunidades")
-    itens = sorted(previsoes, key=lambda x: x[1]["score"], reverse=True)[:15]
-    if not itens:
-        st.warning("Sem jogos futuros para ranquear.")
-    else:
-        df = pd.DataFrame([{
-            "Data": j["data_txt"], "Jogo": f"{j['home']} x {j['away']}",
-            "Palpite": {"Casa": j["home"], "Fora": j["away"], "Empate": "Empate"}[r["palpite"]],
-            "Prob.": pct(r["prob_palpite"]), "Mercado": r["melhor_mercado"],
-            "Prob. mercado": pct(r["melhor_prob"]), "Score": r["score"], "Decisao": r["decisao"],
-        } for j, r in itens])
-        st.dataframe(df, use_container_width=True, hide_index=True)
-        st.subheader("Cartoes e escanteios - todos os jogos")
-        st.dataframe(tabela_cartoes_escanteios(itens), use_container_width=True, hide_index=True)
-        for j, r in itens:
-            render_card(j, r)
-
-
-elif menu == "Jogos ao Vivo":
-    st.subheader("Jogos ao vivo")
-    ao_vivo = [(j, r) for j, r in previsoes if j.get("live")]
-    if not ao_vivo:
-        st.info("Nenhum jogo ao vivo encontrado agora nesta liga.")
-    for j, r in ao_vivo:
-        r = {**r, "classe": "live"}
-        render_card(j, r)
-
-
-elif menu == "Tenis":
-    st.subheader("Analise manual de tenis")
-    t1, t2, t3 = st.columns(3)
-    with t1:
-        jogador1 = st.text_input("Jogador 1", "Novak Djokovic")
-        jogador2 = st.text_input("Jogador 2", "Carlos Alcaraz")
-    with t2:
-        forma1 = st.slider("Forma recente jogador 1 (%)", 0, 100, 78)
-        forma2 = st.slider("Forma recente jogador 2 (%)", 0, 100, 74)
-        sup1 = st.slider("Aderencia superficie jogador 1 (%)", 0, 100, 76)
-        sup2 = st.slider("Aderencia superficie jogador 2 (%)", 0, 100, 80)
-    with t3:
-        h2h1 = st.number_input("Vitorias H2H jogador 1", 0, 50, 3)
-        h2h2 = st.number_input("Vitorias H2H jogador 2", 0, 50, 2)
-        odd1 = st.number_input("Odd jogador 1", 1.01, 50.0, 1.90, step=0.05)
-        odd2 = st.number_input("Odd jogador 2", 1.01, 50.0, 1.95, step=0.05)
-    rating1 = 1500 + (sum(ord(c) for c in jogador1) % 120) - 60
-    rating2 = 1500 + (sum(ord(c) for c in jogador2) % 120) - 60
-    p1, p2 = prob_tenis_manual(forma1, forma2, sup1, sup2, h2h1, h2h2, rating1, rating2)
-    st.metric(jogador1, pct(p1), f"Odd justa {odd_justa(p1):.2f}")
-    st.metric(jogador2, pct(p2), f"Odd justa {odd_justa(p2):.2f}")
-    c1, c2 = st.columns(2)
-    with c1:
-        render_value_box(jogador1, p1, odd1, banca_usuario)
-    with c2:
-        render_value_box(jogador2, p2, odd2, banca_usuario)
-
-
-elif menu == "Performance 36h":
-    st.subheader("Acertos e erros das ultimas 36 horas")
-    rows = avaliar_ultimas_horas(jogos_periodo, 36)
-    if not rows:
-        st.info("Ainda nao ha jogos encerrados nas ultimas 36 horas com amostra suficiente.")
-    else:
-        df = pd.DataFrame(rows)
-        total = len(df)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("1X2", f"{(df['1X2'] == 'acerto').sum()}/{total}", pct((df["1X2"] == "acerto").mean()))
-        c2.metric("Over 1.5", f"{(df['Over 1.5'] == 'acerto').sum()}/{total}", pct((df["Over 1.5"] == "acerto").mean()))
-        c3.metric("Over 2.5", f"{(df['Over 2.5'] == 'acerto').sum()}/{total}", pct((df["Over 2.5"] == "acerto").mean()))
-        c4.metric("Ambas", f"{(df['Ambas'] == 'acerto').sum()}/{total}", pct((df["Ambas"] == "acerto").mean()))
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
-
-elif menu == "Gestao de Banca":
-    st.subheader("Calculadora de stake")
-    banca = st.number_input("Banca Total (R$)", value=1000.0)
-    odd = st.number_input("Odd", value=2.0)
-    prob = st.slider("Sua probabilidade (%)", 1, 100, 55) / 100
-    st.success(f"Sugestao Kelly 25%: R$ {kelly_stake(prob, odd, banca):.2f}")
+if __name__ == "__main__":
+    main()
