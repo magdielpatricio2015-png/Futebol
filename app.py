@@ -1,6 +1,5 @@
 import math, re, unicodedata
 from datetime import datetime, timedelta, timezone
-from collections import defaultdict
 import pandas as pd, requests, streamlit as st
 
 # ------- CONFIGURAÇÃO DA PÁGINA -------
@@ -113,6 +112,10 @@ st.markdown("""
     .finisher-name { font-weight: 700; }
     .finisher-prob { color: #2563eb; font-weight: 700; margin-left: 8px; }
     .team-info { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; color: #475569; }
+    .sidebar-resumo {
+        background: #ffffff; border-radius: 8px; padding: 12px; margin-top: 10px;
+        border: 1px solid #d7dce2; font-size: 0.9rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -410,7 +413,7 @@ def matriz_poisson(m_h, m_a):
     total = sum(sum(row) for row in mat) or 1
     return [[p/total for p in row] for row in mat]
 
-# ------- BALANÇO 24H -------
+# ------- BALANÇO 24H (completo, usado no resumo do botão) -------
 def calcular_balanco_24h(jogos):
     agora = datetime.now(); limite = agora - timedelta(hours=24)
     encerrados = [j for j in jogos if j.get("completed") and j.get("data") and limite <= j["data"] <= agora]
@@ -423,16 +426,21 @@ def calcular_balanco_24h(jogos):
         if jogo["id"] in encerrados_set:
             prev = prever_jogo(jogo, ctx)
             gols = jogo["placar_home"] + jogo["placar_away"]
-            acertos = []; erros = []
-            if prev["over25"] >= 0.5:
-                if gols > 2.5: acertos.append("Over 2.5")
-                else: erros.append("Over 2.5")
-            else:
-                if gols <= 2.5: acertos.append("Under 2.5")
-                else: erros.append("Under 2.5")
-            resultados.append({"jogo": f"{jogo['home']} {jogo['placar_home']} x {jogo['placar_away']} {jogo['away']}",
-                               "gols": gols, "previsao_over25": prev["over25"], "acertos": acertos, "erros": erros})
-        # atualiza contexto
+            # 1X2 real
+            if jogo["placar_home"] > jogo["placar_away"]: real = "Casa"
+            elif jogo["placar_home"] == jogo["placar_away"]: real = "Empate"
+            else: real = "Fora"
+            acertou_vitoria = (real == prev["palpite"])
+            # Over 2.5 gols real
+            acertou_gols = (gols > 2.5 and prev["over25"] >= 0.5) or (gols <= 2.5 and prev["over25"] < 0.5)
+            resultados.append({"jogo": f"{jogo['home']} x {jogo['away']}",
+                               "real": real, "palpite_vitoria": prev["palpite"],
+                               "acertou_vitoria": acertou_vitoria,
+                               "gols": gols, "over25_prev": prev["over25"],
+                               "acertou_gols": acertou_gols,
+                               "cartoes_prev": prev["cartoes_total"],
+                               "escanteios_prev": prev["escanteios_total"]})
+        # atualiza contexto (mesmo código de sempre)
         home, away = jogo["home"], jogo["away"]
         gh, ga = int(jogo["placar_home"]), int(jogo["placar_away"])
         ctx["ratings"].setdefault(home, 1700); ctx["ratings"].setdefault(away, 1700)
@@ -488,7 +496,6 @@ def render_card(jogo, r, posicoes, formas):
     mapa = {"Casa": home, "Fora": away, "Empate": "Empate"}
     riscos = ", ".join(r["riscos"]) if r["riscos"] else "baixo risco"
 
-    # HTML principal (limpo, sem <pr>)
     html_card = f"""
     <div class="card {card_class}">
         <div class="card-title">{home} x {away}{placar_str}</div>
@@ -529,7 +536,6 @@ def render_card(jogo, r, posicoes, formas):
     """
     st.markdown(html_card, unsafe_allow_html=True)
 
-    # Expander com fatores de ajuste
     with st.expander("🔍 Ver ajustes do modelo"):
         st.markdown(f"""
         **Fatores aplicados:**
@@ -573,6 +579,7 @@ def render_value_box(titulo, prob, odd, banca):
     </div>
     """, unsafe_allow_html=True)
 
+# ------- INTERFACE PRINCIPAL -------
 def main():
     st.markdown('<div class="hero"><h1>⚽ Analisador Esportivo Pro 10.4</h1><p>Probabilidades baseadas em posição na tabela, forma recente e histórico de gols.</p></div>', unsafe_allow_html=True)
 
@@ -595,6 +602,32 @@ def main():
         odd_input = st.text_input("Odd do palpite (ex: 2.10)")
         banca = st.number_input("Banca (R$)", 0.0, 100000.0, 1000.0, step=100.0)
 
+        # Botão de resumo das últimas 24h
+        st.markdown("---")
+        if st.button("📊 Resumo 24h (Vitórias, Cartões, Escanteios)"):
+            with st.spinner("Calculando acertos das últimas 24h..."):
+                jogos_resumo, _ = buscar_periodo(liga_id, dias_passado=1, dias_futuro=0)
+                resultados = calcular_balanco_24h(jogos_resumo)
+                if not resultados:
+                    st.warning("Nenhum jogo encerrado nas últimas 24h.")
+                else:
+                    acertos_v = sum(1 for r in resultados if r["acertou_vitoria"])
+                    erros_v = len(resultados) - acertos_v
+                    acertos_g = sum(1 for r in resultados if r["acertou_gols"])
+                    erros_g = len(resultados) - acertos_g
+                    media_cartoes = sum(r["cartoes_prev"] for r in resultados) / len(resultados)
+                    media_escanteios = sum(r["escanteios_prev"] for r in resultados) / len(resultados)
+
+                    st.markdown("#### 🏆 Vitórias (1X2)")
+                    st.markdown(f"✔ Acertos: **{acertos_v}**  |  ✘ Erros: **{erros_v}**")
+                    st.markdown("#### ⚽ Gols (Over 2.5)")
+                    st.markdown(f"✔ Acertos: **{acertos_g}**  |  ✘ Erros: **{erros_g}**")
+                    st.markdown("#### 🟨 Cartões (média prevista)")
+                    st.markdown(f"**{media_cartoes:.1f}** por jogo")
+                    st.markdown("#### 🏁 Escanteios (média prevista)")
+                    st.markdown(f"**{media_escanteios:.1f}** por jogo")
+
+    # Carregar dados principais
     with st.spinner("Buscando dados e calculando..."):
         jogos, logs = buscar_periodo(liga_id, dias_passado, dias_futuro)
         classif = buscar_classificacao(liga_id)
@@ -633,20 +666,7 @@ def main():
             mercado = f"Vitória {jogo['home']}" if prev["palpite"] == "Casa" else (f"Vitória {jogo['away']}" if prev["palpite"] == "Fora" else "Empate")
             render_value_box(f"{mercado} (Palpite)", prob, odd, banca)
 
-    # Balanço 24h
-    st.header("📈 Balanço das últimas 24h")
-    res = calcular_balanco_24h(jogos)
-    if not res:
-        st.info("Nenhum jogo encerrado nas últimas 24h.")
-    else:
-        acertos = sum(len(r["acertos"]) for r in res); erros = sum(len(r["erros"]) for r in res)
-        st.markdown(f"**Acertos:** {acertos} | **Erros:** {erros} | **Total:** {len(res)}")
-        st.dataframe(pd.DataFrame(res)[["jogo", "gols", "previsao_over25"]].assign(
-            previsao=lambda df: df["previsao_over25"].apply(lambda x: "Over" if x>=0.5 else "Under"),
-            resultado=lambda df: df.apply(lambda row: "✔" if (row["previsao"]=="Over" and row["gols"]>2.5) or (row["previsao"]=="Under" and row["gols"]<=2.5) else "✘", axis=1)
-        ), use_container_width=True)
-
-    # Resumo cartões/escanteios
+    # Resumo cartões/escanteios (tabela normal)
     st.subheader("📋 Resumo – Cartões e Escanteios")
     df_resumo = pd.DataFrame([{
         "Jogo": f"{j['home']} x {j['away']}",
@@ -659,7 +679,7 @@ def main():
     } for j, r in todos_jogos])
     st.dataframe(df_resumo, use_container_width=True)
 
-    # Histórico
+    # Histórico da sessão
     st.session_state.historico.extend(todos_jogos)
     st.subheader("📜 Histórico da sessão")
     hist_df = pd.DataFrame([{
