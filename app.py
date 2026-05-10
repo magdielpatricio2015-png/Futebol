@@ -1,11 +1,10 @@
 import math
 import re
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import requests
 import streamlit as st
-
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -17,108 +16,63 @@ st.set_page_config(
     layout="wide",
 )
 
-
 # ============================================================
 # CONSTANTES
 # ============================================================
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
-HEADERS = {"User-Agent": "AnalisadorEsportivoPro/12.2"}
 
-MAX_GOLS = 10
+HEADERS = {
+    "User-Agent": "AnalisadorEsportivoPro/12.2"
+}
+
 RETRIES = 2
+MAX_GOLS = 10
 
-DEFAULT_HOME_ADV = 70
-DEFAULT_RHO_DC = -0.08
-ELO_BASE = 1700
-
+DEFAULT_HOME_ADV = 0.25
 
 LIGAS = {
     "Brasileirão Série A": "bra.1",
-    "Brasileirão Série B": "bra.2",
-    "Copa do Brasil": "bra.copa_do_brasil",
-    "Libertadores": "conmebol.libertadores",
-    "Sul-Americana": "conmebol.sudamericana",
     "Premier League": "eng.1",
     "La Liga": "esp.1",
-    "Serie A (Itália)": "ita.1",
+    "Serie A": "ita.1",
     "Bundesliga": "ger.1",
     "Ligue 1": "fra.1",
     "Champions League": "uefa.champions",
-    "Europa League": "uefa.europa",
 }
-
 
 FORCA_BASE = {
-    "Flamengo": 86,
-    "Palmeiras": 84,
-    "Botafogo": 79,
-    "Atletico-MG": 76,
-    "Sao Paulo": 78,
-    "Fluminense": 77,
-    "Gremio": 74,
-    "Internacional": 75,
-    "Corinthians": 76,
-    "Cruzeiro": 73,
-    "Bahia": 74,
-    "Fortaleza": 73,
-    "Vasco": 70,
-    "Santos": 72,
-    "Ceara": 69,
-    "Sport": 68,
-    "Vitoria": 69,
-    "Manchester City": 91,
-    "Arsenal": 88,
-    "Liverpool": 88,
-    "Chelsea": 82,
-    "Tottenham Hotspur": 80,
-    "Manchester United": 81,
-    "Real Madrid": 90,
-    "Barcelona": 87,
-    "Atletico Madrid": 84,
-    "Bayern Munich": 88,
-    "Borussia Dortmund": 82,
-    "Bayer Leverkusen": 84,
-    "Inter Milan": 86,
-    "Juventus": 82,
-    "Milan": 81,
-    "PSG": 88,
-    "Paris Saint-Germain": 88,
+    "flamengo": 86,
+    "palmeiras": 84,
+    "botafogo": 79,
+    "atletico-mg": 76,
+    "sao paulo": 78,
+    "fluminense": 77,
+    "gremio": 74,
+    "internacional": 75,
+    "corinthians": 76,
+    "cruzeiro": 73,
+    "bahia": 74,
+    "fortaleza": 73,
+    "vasco": 70,
+    "manchester city": 91,
+    "arsenal": 88,
+    "liverpool": 88,
+    "chelsea": 82,
+    "real madrid": 90,
+    "barcelona": 87,
+    "bayern munich": 88,
+    "psg": 88,
 }
-
 
 ALIASES = {
     "man city": "manchester city",
     "man utd": "manchester united",
-    "man united": "manchester united",
-    "tottenham": "tottenham hotspur",
-    "spurs": "tottenham hotspur",
     "psg": "paris saint-germain",
-    "paris sg": "paris saint-germain",
     "inter": "inter milan",
-    "internazionale": "inter milan",
     "atletico mineiro": "atletico-mg",
-    "atletico mg": "atletico-mg",
     "vasco da gama": "vasco",
-    "sao paulo fc": "sao paulo",
-    "gremio fbpa": "gremio",
 }
-
-
-CLASSICOS = {
-    tuple(sorted(["flamengo", "vasco"])),
-    tuple(sorted(["flamengo", "fluminense"])),
-    tuple(sorted(["flamengo", "botafogo"])),
-    tuple(sorted(["palmeiras", "corinthians"])),
-    tuple(sorted(["sao paulo", "corinthians"])),
-    tuple(sorted(["sao paulo", "palmeiras"])),
-    tuple(sorted(["gremio", "internacional"])),
-    tuple(sorted(["atletico-mg", "cruzeiro"])),
-    tuple(sorted(["real madrid", "barcelona"])),
-    tuple(sorted(["manchester united", "manchester city"])),
-    tuple(sorted(["inter milan", "milan"])),
-}
-
 
 # ============================================================
 # CSS
@@ -127,215 +81,75 @@ CLASSICOS = {
 st.markdown(
     """
 <style>
-    .main {
-        background-color: #f8fafc;
-        color: #111827;
-    }
 
-    .block-container {
-        padding-top: 1.2rem;
-        max-width: 1450px;
-    }
+.main {
+    background-color: #f8fafc;
+}
 
-    section[data-testid="stSidebar"] {
-        background: #eef2f7;
-        border-right: 1px solid #d7dce2;
-    }
+.block-container {
+    max-width: 1400px;
+    padding-top: 1rem;
+}
 
-    .hero {
-        border: 1px solid #d7dce2;
-        background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
-        border-radius: 18px;
-        padding: 24px 26px;
-        margin-bottom: 20px;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
-    }
+.hero {
+    background: linear-gradient(135deg,#ffffff,#f1f5f9);
+    border: 1px solid #dbe2ea;
+    padding: 25px;
+    border-radius: 18px;
+    margin-bottom: 20px;
+}
 
-    .hero h1 {
-        margin: 0;
-        font-size: 2.15rem;
-        font-weight: 900;
-        letter-spacing: -0.03em;
-        color: #0f172a;
-    }
+.hero h1 {
+    margin: 0;
+    font-size: 2rem;
+}
 
-    .hero p {
-        margin: 8px 0 0;
-        color: #475569;
-        font-size: 1rem;
-    }
+.pro-card {
+    background: white;
+    border-radius: 18px;
+    padding: 18px;
+    margin-bottom: 18px;
+    border: 1px solid #dbe2ea;
+    box-shadow: 0 4px 18px rgba(0,0,0,.05);
+}
 
-    .section-title {
-        font-size: 1.25rem;
-        font-weight: 900;
-        color: #0f172a;
-        margin: 16px 0 8px;
-    }
+.prob-grid {
+    display: grid;
+    grid-template-columns: repeat(5,1fr);
+    gap: 10px;
+    margin-top: 15px;
+}
 
-    .pro-card {
-        border: 1px solid #d7dce2;
-        border-radius: 16px;
-        padding: 18px 20px;
-        margin: 14px 0;
-        background: #ffffff;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
-    }
+.prob-box {
+    background: #f8fafc;
+    border-radius: 12px;
+    padding: 12px;
+    border: 1px solid #e2e8f0;
+}
 
-    .pro-card.live {
-        border-left: 7px solid #2563eb;
-    }
+.conf-green {
+    color: #16a34a;
+    font-weight: bold;
+}
 
-    .pro-card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 16px;
-        margin-bottom: 14px;
-    }
+.conf-yellow {
+    color: #ca8a04;
+    font-weight: bold;
+}
 
-    .match-title {
-        font-size: 1.18rem;
-        font-weight: 900;
-        color: #0f172a;
-    }
+.conf-red {
+    color: #dc2626;
+    font-weight: bold;
+}
 
-    .match-subtitle {
-        color: #64748b;
-        font-size: 0.88rem;
-        margin-top: 4px;
-    }
-
-    .confidence {
-        padding: 6px 12px;
-        border-radius: 999px;
-        color: white;
-        font-size: 0.82rem;
-        font-weight: 800;
-        white-space: nowrap;
-    }
-
-    .confidence.green {
-        background: #16a34a;
-    }
-
-    .confidence.amber {
-        background: #ca8a04;
-    }
-
-    .confidence.red {
-        background: #dc2626;
-    }
-
-    .market-highlight {
-        border-radius: 12px;
-        background: #f1f5f9;
-        border: 1px solid #e2e8f0;
-        padding: 10px 12px;
-        margin-bottom: 14px;
-        color: #334155;
-    }
-
-    .prob-grid {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 10px;
-        margin-bottom: 12px;
-    }
-
-    .prob-grid div {
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 10px;
-        background: #ffffff;
-    }
-
-    .prob-grid span {
-        display: block;
-        font-size: 0.78rem;
-        color: #64748b;
-        margin-bottom: 3px;
-    }
-
-    .prob-grid strong {
-        font-size: 1rem;
-        color: #0f172a;
-    }
-
-    .card-footer {
-        font-size: 0.88rem;
-        color: #475569;
-        border-top: 1px solid #e2e8f0;
-        padding-top: 10px;
-        line-height: 1.6;
-    }
-
-    .live-badge {
-        background: #dc2626;
-        color: white;
-        padding: 3px 8px;
-        border-radius: 999px;
-        font-weight: 800;
-        font-size: 0.72rem;
-        margin-left: 8px;
-    }
-
-    .pill {
-        display: inline-block;
-        padding: 4px 9px;
-        margin: 4px 5px 0 0;
-        border-radius: 999px;
-        background: #eef2f7;
-        border: 1px solid #d7dce2;
-        font-size: .84rem;
-        color: #334155;
-    }
-
-    .form-badge {
-        display: inline-block;
-        width: 22px;
-        height: 22px;
-        line-height: 22px;
-        text-align: center;
-        border-radius: 6px;
-        font-size: 0.78rem;
-        font-weight: 900;
-        margin-right: 3px;
-        color: white;
-    }
-
-    .form-v {
-        background: #16a34a;
-    }
-
-    .form-e {
-        background: #eab308;
-    }
-
-    .form-d {
-        background: #dc2626;
-    }
-
-    @media (max-width: 900px) {
-        .prob-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .pro-card-header {
-            flex-direction: column;
-        }
-    }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-
 # ============================================================
 # UTILITÁRIOS
 # ============================================================
-
-def hoje():
-    return datetime.now().date()
 
 
 def nome_limpo(nome):
@@ -344,11 +158,20 @@ def nome_limpo(nome):
 
 def normalizar(nome):
     nome = nome_limpo(nome).lower()
+
     nome = unicodedata.normalize("NFKD", nome)
-    nome = "".join(c for c in nome if not unicodedata.combining(c))
-    nome = re.sub(r"\b(fc|cf|sc|afc|ec)\b", "", nome)
+
+    nome = "".join(
+        c for c in nome
+        if not unicodedata.combining(c)
+    )
+
+    nome = re.sub(r"\b(fc|sc|ec|afc)\b", "", nome)
+
     nome = re.sub(r"[^a-z0-9\s\-]", "", nome)
+
     nome = re.sub(r"\s+", " ", nome).strip()
+
     return ALIASES.get(nome, nome)
 
 
@@ -361,135 +184,126 @@ def parse_dt(valor):
         return None
 
     try:
-        return datetime.fromisoformat(valor.replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+        return (
+            datetime
+            .fromisoformat(valor.replace("Z", "+00:00"))
+            .astimezone()
+            .replace(tzinfo=None)
+        )
     except Exception:
         return None
-
-
-def pct(x):
-    return f"{100 * float(x):.1f}%"
 
 
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
+def pct(x):
+    return f"{100 * x:.1f}%"
+
+
 def poisson_pmf(k, media):
-    media = max(0.03, float(media))
-    return math.exp(-media) * (media ** k) / math.factorial(k)
+    media = max(0.01, media)
+
+    return (
+        math.exp(-media)
+        * (media ** k)
+        / math.factorial(k)
+    )
 
 
 def odd_justa(prob):
     return 1 / max(prob, 0.0001)
 
 
-def prob_over_poisson(media, linha):
-    corte = int(math.floor(linha))
-    return clamp(
-        1 - sum(poisson_pmf(k, media) for k in range(corte + 1)),
-        0.0,
-        1.0,
-    )
-
-
 # ============================================================
 # API ESPN
 # ============================================================
 
+
 def fetch_with_retry(url, params=None, retries=RETRIES):
+
     ultimo_erro = ""
 
     for _ in range(retries):
+
         try:
+
             resp = requests.get(
                 url,
                 params=params or {},
                 headers=HEADERS,
-                timeout=12,
+                timeout=15,
             )
+
             resp.raise_for_status()
+
             return resp.json(), ""
+
         except requests.RequestException as exc:
-            ultimo_erro = f"Erro ESPN: {exc}"
+            ultimo_erro = str(exc)
 
     return {}, ultimo_erro
 
 
-@st.cache_data(ttl=240, show_spinner=False)
-def buscar_scoreboard(liga_id, data_iso=None):
-    params = {"limit": 300}
+@st.cache_data(ttl=240)
+def buscar_scoreboard(liga_id):
 
-    if data_iso:
-        params["dates"] = data_iso.replace("-", "")
+    url = f"{ESPN_BASE}/{liga_id}/scoreboard"
 
-    return fetch_with_retry(f"{ESPN_BASE}/{liga_id}/scoreboard", params)
+    payload, err = fetch_with_retry(
+        url,
+        params={"limit": 100}
+    )
+
+    return payload, err
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def buscar_classificacao(liga_id):
-    url = f"{ESPN_BASE}/{liga_id}/standings"
-    payload, err = fetch_with_retry(url)
-
-    if err or not payload:
-        return {}
-
-    tabela = {}
-
-    try:
-        grupos = payload.get("children", []) or [payload]
-
-        for group in grupos:
-            standings = group.get("standings", {})
-            entries = standings.get("entries", []) if isinstance(standings, dict) else []
-
-            for entry in entries:
-                time_nome = entry.get("team", {}).get("displayName", "")
-                time_nome_limpo = nome_limpo(time_nome)
-                pos = entry.get("rank", 99)
-
-                if pos == 99:
-                    stats_list = entry.get("stats", [{}])
-                    if stats_list:
-                        pos = int(stats_list[0].get("value", 99))
-
-                tabela[key_time(time_nome_limpo)] = {
-                    "posicao": pos,
-                    "time_original": time_nome_limpo,
-                }
-    except Exception:
-        pass
-
-    return tabela
+# ============================================================
+# EXTRAÇÃO DOS JOGOS
+# ============================================================
 
 
 def extrair_jogos(payload, liga_id):
+
     jogos = []
 
-    for event in payload.get("events", []) or []:
-        comps = event.get("competitions") or []
+    for event in payload.get("events", []):
+
+        comps = event.get("competitions", [])
 
         if not comps:
             continue
 
         comp = comps[0]
-        competidores = comp.get("competitors") or []
+
+        competidores = comp.get("competitors", [])
 
         if len(competidores) < 2:
             continue
 
         home = next(
-            (c for c in competidores if c.get("homeAway") == "home"),
-            competidores[0],
-        )
-        away = next(
-            (c for c in competidores if c.get("homeAway") == "away"),
-            competidores[1],
+            (
+                c for c in competidores
+                if c.get("homeAway") == "home"
+            ),
+            competidores[0]
         )
 
-        status_raw = event.get("status") or {}
+        away = next(
+            (
+                c for c in competidores
+                if c.get("homeAway") == "away"
+            ),
+            competidores[1]
+        )
+
+        status_raw = event.get("status", {})
+
         status_type = status_raw.get("type", {})
 
         def placar(c):
+
             try:
                 return int(float(c.get("score", 0)))
             except Exception:
@@ -497,11 +311,222 @@ def extrair_jogos(payload, liga_id):
 
         dt = parse_dt(event.get("date"))
 
-        jogos.append(
-            {
-                "id": str(event.get("id", "")),
-                "liga": liga_id,
-                "nome": event.get("name", ""),
-                "home": nome_limpo(home.get("team", {}).get("displayName", "Casa")),
-                "away": nome_limpo(away.get("team", {}).get("displayName", "Fora")),
-               
+        jogos.append({
+            "id": str(event.get("id", "")),
+            "liga": liga_id,
+            "nome": event.get("name", ""),
+            "home": nome_limpo(
+                home.get("team", {}).get(
+                    "displayName",
+                    "Casa"
+                )
+            ),
+            "away": nome_limpo(
+                away.get("team", {}).get(
+                    "displayName",
+                    "Fora"
+                )
+            ),
+            "home_score": placar(home),
+            "away_score": placar(away),
+            "data": dt,
+            "status": status_type.get(
+                "description",
+                ""
+            ),
+            "status_nome": status_type.get(
+                "name",
+                ""
+            ),
+            "em_jogo": (
+                status_type.get("state") == "in"
+            ),
+            "finalizado": (
+                status_type.get("state") == "post"
+            ),
+        })
+
+    return jogos
+
+
+# ============================================================
+# MODELO SIMPLES DE PROBABILIDADE
+# ============================================================
+
+
+def forca_time(nome):
+
+    key = key_time(nome)
+
+    return FORCA_BASE.get(key, 70)
+
+
+def calcular_probabilidades(home, away):
+
+    fh = forca_time(home)
+    fa = forca_time(away)
+
+    diff = fh - fa
+
+    media_home = 1.4 + (diff * 0.02) + DEFAULT_HOME_ADV
+    media_away = 1.1 - (diff * 0.015)
+
+    media_home = clamp(media_home, 0.2, 4.0)
+    media_away = clamp(media_away, 0.2, 4.0)
+
+    matriz = {}
+
+    p_home = 0
+    p_draw = 0
+    p_away = 0
+    p_over25 = 0
+    p_btts = 0
+
+    for gh in range(MAX_GOLS + 1):
+
+        for ga in range(MAX_GOLS + 1):
+
+            p = (
+                poisson_pmf(gh, media_home)
+                * poisson_pmf(ga, media_away)
+            )
+
+            matriz[(gh, ga)] = p
+
+            if gh > ga:
+                p_home += p
+
+            elif gh == ga:
+                p_draw += p
+
+            else:
+                p_away += p
+
+            if (gh + ga) >= 3:
+                p_over25 += p
+
+            if gh > 0 and ga > 0:
+                p_btts += p
+
+    return {
+        "home": clamp(p_home, 0, 1),
+        "draw": clamp(p_draw, 0, 1),
+        "away": clamp(p_away, 0, 1),
+        "over25": clamp(p_over25, 0, 1),
+        "btts": clamp(p_btts, 0, 1),
+    }
+
+
+# ============================================================
+# UI
+# ============================================================
+
+st.markdown(
+    """
+<div class="hero">
+    <h1>⚽ Analisador Esportivo Pro 12.2</h1>
+    <p>
+        Probabilidades usando Poisson + Força Base + ESPN API
+    </p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+liga_nome = st.sidebar.selectbox(
+    "Escolha a liga",
+    list(LIGAS.keys())
+)
+
+liga_id = LIGAS[liga_nome]
+
+payload, erro = buscar_scoreboard(liga_id)
+
+if erro:
+    st.error(erro)
+    st.stop()
+
+jogos = extrair_jogos(payload, liga_id)
+
+if not jogos:
+    st.warning("Nenhum jogo encontrado.")
+    st.stop()
+
+st.subheader(f"Jogos encontrados: {len(jogos)}")
+
+for jogo in jogos:
+
+    probs = calcular_probabilidades(
+        jogo["home"],
+        jogo["away"]
+    )
+
+    maior = max(
+        probs["home"],
+        probs["draw"],
+        probs["away"]
+    )
+
+    if maior >= 0.60:
+        conf_class = "conf-green"
+        confianca = "ALTA"
+
+    elif maior >= 0.45:
+        conf_class = "conf-yellow"
+        confianca = "MÉDIA"
+
+    else:
+        conf_class = "conf-red"
+        confianca = "BAIXA"
+
+    st.markdown(
+        f"""
+<div class="pro-card">
+
+    <h3>
+        {jogo["home"]} x {jogo["away"]}
+    </h3>
+
+    <p>
+        Status: {jogo["status"]}
+    </p>
+
+    <p class="{conf_class}">
+        Confiança: {confianca}
+    </p>
+
+    <div class="prob-grid">
+
+        <div class="prob-box">
+            <b>Casa</b><br>
+            {pct(probs["home"])}
+        </div>
+
+        <div class="prob-box">
+            <b>Empate</b><br>
+            {pct(probs["draw"])}
+        </div>
+
+        <div class="prob-box">
+            <b>Fora</b><br>
+            {pct(probs["away"])}
+        </div>
+
+        <div class="prob-box">
+            <b>Over 2.5</b><br>
+            {pct(probs["over25"])}
+        </div>
+
+        <div class="prob-box">
+            <b>Ambos Marcam</b><br>
+            {pct(probs["btts"])}
+        </div>
+
+    </div>
+
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+st.success("Aplicação carregada com sucesso.")
