@@ -11,28 +11,25 @@ import streamlit as st
 
 
 st.set_page_config(
-    page_title="Analisador Esportivo Pro 14.0",
+    page_title="Analisador Esportivo Pro 15",
     page_icon="⚽",
     layout="wide",
 )
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
-HEADERS = {"User-Agent": "AnalisadorEsportivoPro/14.0"}
+HEADERS = {"User-Agent": "AnalisadorEsportivoPro/15.0"}
+
+DB_PATH = "data/modelo_v15.db"
 
 MAX_GOLS = 10
 RETRIES = 2
 DEFAULT_HOME_ADV = 0.25
-DB_PATH = "data/modelo.db"
-
-MIN_JOGOS_PARA_APRENDER = 5
+MIN_JOGOS_TREINO = 5
 
 
 LIGAS = {
     "Brasileirão Série A": "bra.1",
     "Brasileirão Série B": "bra.2",
-    "Copa do Brasil": "bra.copa_do_brasil",
-    "Libertadores": "conmebol.libertadores",
-    "Sul-Americana": "conmebol.sudamericana",
     "Premier League": "eng.1",
     "La Liga": "esp.1",
     "Serie A Itália": "ita.1",
@@ -40,6 +37,8 @@ LIGAS = {
     "Ligue 1": "fra.1",
     "Champions League": "uefa.champions",
     "Europa League": "uefa.europa",
+    "Libertadores": "conmebol.libertadores",
+    "Sul-Americana": "conmebol.sudamericana",
 }
 
 
@@ -137,12 +136,16 @@ def init_db():
             data_jogo TEXT,
             home TEXT,
             away TEXT,
+
             mercado_base TEXT,
+            codigo_base TEXT,
             prob_base REAL,
+
             mercado_aprendido TEXT,
+            codigo_aprendido TEXT,
             prob_aprendido REAL,
-            ajuste REAL,
-            confianca TEXT,
+            ajuste_aplicado REAL,
+
             placar_previsto TEXT,
             home_score INTEGER,
             away_score INTEGER,
@@ -162,6 +165,7 @@ def init_db():
             fator REAL DEFAULT 0,
             jogos INTEGER DEFAULT 0,
             acertos INTEGER DEFAULT 0,
+            taxa REAL DEFAULT 0,
             atualizado_em TEXT
         )
         """
@@ -182,11 +186,11 @@ def salvar_previsao(jogo, liga_nome, base, aprendido, placar_previsto):
         """
         INSERT OR IGNORE INTO previsoes (
             game_id, liga_id, liga_nome, data_jogo, home, away,
-            mercado_base, prob_base,
-            mercado_aprendido, prob_aprendido, ajuste,
-            confianca, placar_previsto, finalizado, criado_em
+            mercado_base, codigo_base, prob_base,
+            mercado_aprendido, codigo_aprendido, prob_aprendido, ajuste_aplicado,
+            placar_previsto, finalizado, criado_em
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             jogo["id"],
@@ -196,11 +200,12 @@ def salvar_previsao(jogo, liga_nome, base, aprendido, placar_previsto):
             jogo["home"],
             jogo["away"],
             mercado_base,
+            codigo_base,
             float(prob_base),
             mercado_ap,
+            codigo_ap,
             float(prob_ap),
             float(fator),
-            nivel_confianca(prob_ap),
             placar_previsto,
             0,
             datetime.now().isoformat(),
@@ -273,17 +278,20 @@ def carregar_ajustes():
 
 
 def salvar_ajuste(chave, fator, jogos, acertos):
+    taxa = acertos / jogos if jogos else 0
+
     conn = conectar_db()
     cur = conn.cursor()
 
     cur.execute(
         """
-        INSERT INTO ajustes (chave, fator, jogos, acertos, atualizado_em)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO ajustes (chave, fator, jogos, acertos, taxa, atualizado_em)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(chave) DO UPDATE SET
             fator = excluded.fator,
             jogos = excluded.jogos,
             acertos = excluded.acertos,
+            taxa = excluded.taxa,
             atualizado_em = excluded.atualizado_em
         """,
         (
@@ -291,6 +299,7 @@ def salvar_ajuste(chave, fator, jogos, acertos):
             float(fator),
             int(jogos),
             int(acertos),
+            float(taxa),
             datetime.now().isoformat(),
         ),
     )
@@ -354,14 +363,6 @@ def eh_classico(home, away):
     return tuple(sorted([normalizar(home), normalizar(away)])) in CLASSICOS
 
 
-def nivel_confianca(prob):
-    if prob >= 0.72:
-        return "ALTA"
-    if prob >= 0.58:
-        return "MÉDIA"
-    return "BAIXA"
-
-
 def status_label(jogo):
     if jogo["em_jogo"]:
         return "🔴 Ao vivo"
@@ -372,8 +373,16 @@ def status_label(jogo):
     return jogo["status"] or "Status não informado"
 
 
+def nivel_confianca(prob):
+    if prob >= 0.72:
+        return "ALTA"
+    if prob >= 0.58:
+        return "MÉDIA"
+    return "BAIXA"
+
+
 # ============================================================
-# API ESPN
+# ESPN
 # ============================================================
 
 def fetch_with_retry(url, params=None, retries=RETRIES):
@@ -507,7 +516,6 @@ def calcular_probabilidades(home, away):
 
     p_home = p_draw = p_away = 0
     p_over15 = p_over25 = p_over35 = p_under25 = p_btts = 0
-
     placares = []
 
     for gh in range(MAX_GOLS + 1):
@@ -549,8 +557,6 @@ def calcular_probabilidades(home, away):
         "dupla_1x": clamp(p_home + p_draw, 0, 1),
         "dupla_x2": clamp(p_draw + p_away, 0, 1),
         "dupla_12": clamp(p_home + p_away, 0, 1),
-        "media_home": media_home,
-        "media_away": media_away,
         "forca_home": fh,
         "forca_away": fa,
         "placares": placares[:5],
@@ -584,9 +590,14 @@ def obter_fator_aprendizado(liga_id, codigo):
     conn = conectar_db()
     cur = conn.cursor()
 
-    fator = 0.0
+    fator_total = 0.0
 
-    for chave in [f"mercado:{codigo}", f"liga:{liga_id}|mercado:{codigo}"]:
+    chaves = [
+        f"mercado:{codigo}",
+        f"liga:{liga_id}|mercado:{codigo}",
+    ]
+
+    for chave in chaves:
         cur.execute(
             "SELECT fator, jogos FROM ajustes WHERE chave = ?",
             (chave,),
@@ -595,25 +606,25 @@ def obter_fator_aprendizado(liga_id, codigo):
         row = cur.fetchone()
 
         if row:
-            fator_row, jogos = row
+            fator, jogos = row
 
-            if int(jogos) >= MIN_JOGOS_PARA_APRENDER:
-                fator += float(fator_row)
+            if int(jogos) >= MIN_JOGOS_TREINO:
+                fator_total += float(fator)
 
     conn.close()
-    return clamp(fator, -0.12, 0.12)
+
+    return clamp(fator_total, -0.15, 0.15)
 
 
 def melhor_mercado_aprendido(probs, jogo):
-    mercados = mercados_disponiveis(probs, jogo["home"], jogo["away"])
-    ajustados = []
+    candidatos = []
 
-    for nome, codigo, prob in mercados:
+    for nome, codigo, prob in mercados_disponiveis(probs, jogo["home"], jogo["away"]):
         fator = obter_fator_aprendizado(jogo["liga"], codigo)
         prob_ajustada = clamp(prob + fator, 0.01, 0.99)
-        ajustados.append((nome, codigo, prob_ajustada, fator, prob))
+        candidatos.append((nome, codigo, prob_ajustada, fator, prob))
 
-    return sorted(ajustados, key=lambda x: x[2], reverse=True)[0]
+    return sorted(candidatos, key=lambda x: x[2], reverse=True)[0]
 
 
 def verificar_acerto(mercado, home_score, away_score):
@@ -648,33 +659,14 @@ def verificar_acerto(mercado, home_score, away_score):
         return ambos
 
     if " vence" in mercado:
+        time = mercado.replace(" vence", "")
+
         return (
             home_score > away_score
             or away_score > home_score
         )
 
     return False
-
-
-def mercado_para_codigo(mercado):
-    mapa = {
-        "Empate": "draw",
-        "Dupla chance 1X": "dupla_1x",
-        "Dupla chance X2": "dupla_x2",
-        "Dupla chance 12": "dupla_12",
-        "Over 1.5 gols": "over15",
-        "Over 2.5 gols": "over25",
-        "Under 2.5 gols": "under25",
-        "Ambos marcam": "btts",
-    }
-
-    if mercado in mapa:
-        return mapa[mercado]
-
-    if " vence" in mercado:
-        return "home"
-
-    return "outro"
 
 
 def treinar_modelo():
@@ -690,16 +682,14 @@ def treinar_modelo():
 
     treinados = 0
 
-    df["codigo"] = df["mercado_aprendido"].apply(mercado_para_codigo)
-
-    for codigo in df["codigo"].dropna().unique():
-        sub = df[df["codigo"] == codigo]
+    for codigo in df["codigo_aprendido"].dropna().unique():
+        sub = df[df["codigo_aprendido"] == codigo]
         jogos = len(sub)
 
-        if jogos >= MIN_JOGOS_PARA_APRENDER:
+        if jogos >= MIN_JOGOS_TREINO:
             acertos = int(sub["acertou_aprendido"].fillna(0).sum())
             taxa = acertos / jogos
-            fator = clamp((taxa - 0.55) * 0.18, -0.08, 0.08)
+            fator = clamp((taxa - 0.55) * 0.20, -0.08, 0.08)
 
             salvar_ajuste(f"mercado:{codigo}", fator, jogos, acertos)
             treinados += 1
@@ -707,14 +697,14 @@ def treinar_modelo():
     for liga_id in df["liga_id"].dropna().unique():
         df_liga = df[df["liga_id"] == liga_id]
 
-        for codigo in df_liga["codigo"].dropna().unique():
-            sub = df_liga[df_liga["codigo"] == codigo]
+        for codigo in df_liga["codigo_aprendido"].dropna().unique():
+            sub = df_liga[df_liga["codigo_aprendido"] == codigo]
             jogos = len(sub)
 
-            if jogos >= MIN_JOGOS_PARA_APRENDER:
+            if jogos >= MIN_JOGOS_TREINO:
                 acertos = int(sub["acertou_aprendido"].fillna(0).sum())
                 taxa = acertos / jogos
-                fator = clamp((taxa - 0.55) * 0.14, -0.06, 0.06)
+                fator = clamp((taxa - 0.55) * 0.15, -0.06, 0.06)
 
                 salvar_ajuste(f"liga:{liga_id}|mercado:{codigo}", fator, jogos, acertos)
                 treinados += 1
@@ -728,8 +718,8 @@ def treinar_modelo():
 
 init_db()
 
-st.title("⚽ Analisador Esportivo Pro 14.0")
-st.caption("Modelo Base vs Modelo Aprendido + Backtest 24h + SQLite automático.")
+st.title("⚽ Analisador Esportivo Pro 15")
+st.caption("Modelo Base vs Modelo Aprendido com aprendizado real por histórico.")
 
 aba_jogos, aba_backtest, aba_aprendizado = st.tabs(
     ["Jogos", "Backtest 24h", "Aprendizado"]
@@ -774,70 +764,64 @@ with aba_jogos:
     elif filtro_status == "Finalizados":
         jogos = [j for j in jogos if j["finalizado"]]
 
-    if not jogos:
-        st.warning("Nenhum jogo encontrado.")
-    else:
-        st.subheader(f"{liga_nome} — {len(jogos)} jogo(s)")
+    st.subheader(f"{liga_nome} — {len(jogos)} jogo(s)")
 
-        resumo = []
+    resumo = []
 
-        for jogo in jogos:
-            probs = calcular_probabilidades(jogo["home"], jogo["away"])
+    for jogo in jogos:
+        probs = calcular_probabilidades(jogo["home"], jogo["away"])
 
-            base = melhor_mercado_base(probs, jogo["home"], jogo["away"])
-            aprendido = melhor_mercado_aprendido(probs, jogo)
+        base = melhor_mercado_base(probs, jogo["home"], jogo["away"])
+        aprendido = melhor_mercado_aprendido(probs, jogo)
 
-            placar_top = probs["placares"][0]
-            placar_previsto = f"{placar_top[0]} x {placar_top[1]}"
+        placar_top = probs["placares"][0]
+        placar_previsto = f"{placar_top[0]} x {placar_top[1]}"
 
-            salvar_previsao(jogo, liga_nome, base, aprendido, placar_previsto)
+        salvar_previsao(jogo, liga_nome, base, aprendido, placar_previsto)
 
-            if jogo["finalizado"]:
-                atualizar_resultado(jogo)
+        if jogo["finalizado"]:
+            atualizar_resultado(jogo)
 
-            mercado_base, codigo_base, prob_base = base
-            mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
+        mercado_base, codigo_base, prob_base = base
+        mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
 
-            placar_txt = ""
+        placar_txt = ""
+        if jogo["finalizado"] or jogo["em_jogo"]:
+            placar_txt = f" — {jogo['home_score']} x {jogo['away_score']}"
 
-            if jogo["finalizado"] or jogo["em_jogo"]:
-                placar_txt = f" — {jogo['home_score']} x {jogo['away_score']}"
+        resumo.append(
+            {
+                "Jogo": f"{jogo['home']} x {jogo['away']}",
+                "Status": status_label(jogo),
+                "Base": mercado_base,
+                "Prob Base": pct(prob_base),
+                "Aprendido": mercado_ap,
+                "Prob Aprendida": pct(prob_ap),
+                "Ajuste": f"{fator:+.1%}",
+            }
+        )
 
-            data_txt = jogo["data"].strftime("%d/%m/%Y %H:%M") if jogo["data"] else "Data não informada"
+        with st.container(border=True):
+            st.markdown(f"### {jogo['home']} x {jogo['away']}{placar_txt}")
+            st.write(f"**Status:** {status_label(jogo)}")
 
-            resumo.append(
-                {
-                    "Jogo": f"{jogo['home']} x {jogo['away']}",
-                    "Status": status_label(jogo),
-                    "Base": mercado_base,
-                    "Prob. Base": pct(prob_base),
-                    "Aprendido": mercado_ap,
-                    "Prob. Aprendida": pct(prob_ap),
-                    "Ajuste": f"{fator:+.1%}",
-                }
-            )
+            c1, c2 = st.columns(2)
+            c1.info(f"Modelo Base: **{mercado_base}** — {pct(prob_base)}")
+            c2.success(f"Modelo Aprendido: **{mercado_ap}** — {pct(prob_ap)} | Ajuste {fator:+.1%}")
 
-            with st.container(border=True):
-                st.markdown(f"### {jogo['home']} x {jogo['away']}{placar_txt}")
-                st.write(f"**Status:** {status_label(jogo)}")
-                st.write(f"**Data:** {data_txt}")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Força Casa", probs["forca_home"])
+            c2.metric("Força Fora", probs["forca_away"])
+            c3.metric("Placar provável", placar_previsto)
 
-                c1, c2 = st.columns(2)
-                c1.info(f"Modelo Base: **{mercado_base}** — {pct(prob_base)}")
-                c2.success(f"Modelo Aprendido: **{mercado_ap}** — {pct(prob_ap)} | Ajuste {fator:+.1%}")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Casa", pct(probs["home"]), f"Odd {odd_justa(probs['home']):.2f}")
+            c2.metric("Empate", pct(probs["draw"]), f"Odd {odd_justa(probs['draw']):.2f}")
+            c3.metric("Fora", pct(probs["away"]), f"Odd {odd_justa(probs['away']):.2f}")
+            c4.metric("Over 2.5", pct(probs["over25"]), f"Odd {odd_justa(probs['over25']):.2f}")
+            c5.metric("BTTS", pct(probs["btts"]), f"Odd {odd_justa(probs['btts']):.2f}")
 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Força casa", probs["forca_home"])
-                c2.metric("Força fora", probs["forca_away"])
-                c3.metric("Placar provável", placar_previsto)
-
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric("Casa", pct(probs["home"]), f"Odd {odd_justa(probs['home']):.2f}")
-                c2.metric("Empate", pct(probs["draw"]), f"Odd {odd_justa(probs['draw']):.2f}")
-                c3.metric("Fora", pct(probs["away"]), f"Odd {odd_justa(probs['away']):.2f}")
-                c4.metric("Over 2.5", pct(probs["over25"]), f"Odd {odd_justa(probs['over25']):.2f}")
-                c5.metric("BTTS", pct(probs["btts"]), f"Odd {odd_justa(probs['btts']):.2f}")
-
+    if resumo:
         st.subheader("Resumo")
         st.dataframe(pd.DataFrame(resumo), use_container_width=True, hide_index=True)
 
@@ -872,17 +856,8 @@ with aba_backtest:
             mercado_base, codigo_base, prob_base = base
             mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
 
-            acertou_base = verificar_acerto(
-                mercado_base,
-                jogo["home_score"],
-                jogo["away_score"],
-            )
-
-            acertou_ap = verificar_acerto(
-                mercado_ap,
-                jogo["home_score"],
-                jogo["away_score"],
-            )
+            acertou_base = verificar_acerto(mercado_base, jogo["home_score"], jogo["away_score"])
+            acertou_ap = verificar_acerto(mercado_ap, jogo["home_score"], jogo["away_score"])
 
             linhas.append(
                 {
@@ -890,12 +865,10 @@ with aba_backtest:
                     "Jogo": f"{jogo['home']} x {jogo['away']}",
                     "Placar": f"{jogo['home_score']} x {jogo['away_score']}",
                     "Base": mercado_base,
-                    "Base Prob.": pct(prob_base),
                     "Base Resultado": "✅" if acertou_base else "❌",
                     "Aprendido": mercado_ap,
-                    "Aprendido Prob.": pct(prob_ap),
                     "Aprendido Resultado": "✅" if acertou_ap else "❌",
-                    "Ganho": "✅ +1" if acertou_ap and not acertou_base else "❌ -1" if acertou_base and not acertou_ap else "0",
+                    "Ajuste": f"{fator:+.1%}",
                 }
             )
 
@@ -904,13 +877,13 @@ with aba_backtest:
         else:
             df_bt = pd.DataFrame(linhas)
 
+            total = len(df_bt)
             acertos_base = (df_bt["Base Resultado"] == "✅").sum()
             acertos_ap = (df_bt["Aprendido Resultado"] == "✅").sum()
-            total = len(df_bt)
             ganho = acertos_ap - acertos_base
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Jogos analisados", total)
+            c1.metric("Jogos", total)
             c2.metric("Base", f"{acertos_base}/{total}", pct(acertos_base / total))
             c3.metric("Aprendido", f"{acertos_ap}/{total}", pct(acertos_ap / total))
             c4.metric("Ganho líquido", ganho)
@@ -919,12 +892,13 @@ with aba_backtest:
 
 
 with aba_aprendizado:
-    st.subheader("🧠 Aprendizado")
+    st.subheader("🧠 Aprendizado Real")
 
     df = carregar_previsoes()
+    ajustes = carregar_ajustes()
 
     if df.empty:
-        st.info("Ainda não há previsões salvas.")
+        st.info("Ainda não há histórico salvo.")
     else:
         finalizados = df[df["finalizado"] == 1].copy()
 
@@ -936,25 +910,26 @@ with aba_aprendizado:
         if len(finalizados) > 0:
             base_acc = finalizados["acertou_base"].fillna(0).sum() / len(finalizados)
             ap_acc = finalizados["acertou_aprendido"].fillna(0).sum() / len(finalizados)
-            ganho = finalizados["acertou_aprendido"].fillna(0).sum() - finalizados["acertou_base"].fillna(0).sum()
+            ganho = int(
+                finalizados["acertou_aprendido"].fillna(0).sum()
+                - finalizados["acertou_base"].fillna(0).sum()
+            )
         else:
             base_acc = 0
             ap_acc = 0
             ganho = 0
 
         c3.metric("Base histórica", pct(base_acc))
-        c4.metric("Aprendido histórico", pct(ap_acc), f"Ganho {int(ganho)}")
+        c4.metric("Aprendido histórico", pct(ap_acc), f"Ganho {ganho}")
 
-        if st.button("Treinar com histórico salvo"):
+        if st.button("Treinar modelo agora"):
             qtd = treinar_modelo()
             st.success(f"Treinamento concluído. Ajustes atualizados: {qtd}")
             st.rerun()
 
         st.subheader("Ajustes aprendidos")
-        ajustes = carregar_ajustes()
-
         if ajustes.empty:
-            st.info("Nenhum ajuste aprendido ainda.")
+            st.info("Nenhum ajuste aprendido ainda. Rode backtest e depois treine.")
         else:
             st.dataframe(ajustes, use_container_width=True, hide_index=True)
 
