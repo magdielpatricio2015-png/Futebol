@@ -7,15 +7,12 @@ import requests
 import streamlit as st
 
 
-# ============================================================
-# CONFIGURAÇÃO
-# ============================================================
-
 st.set_page_config(
     page_title="Analisador Esportivo Pro",
     page_icon="⚽",
     layout="wide",
 )
+
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 HEADERS = {"User-Agent": "AnalisadorEsportivoPro/12.2"}
@@ -95,123 +92,6 @@ ALIASES = {
     "gremio fbpa": "gremio",
 }
 
-
-# ============================================================
-# CSS
-# ============================================================
-
-st.markdown(
-    """
-<style>
-    .block-container {
-        max-width: 1450px;
-        padding-top: 1rem;
-    }
-
-    .hero {
-        background: linear-gradient(135deg, #ffffff, #f1f5f9);
-        border: 1px solid #d7dce2;
-        border-radius: 18px;
-        padding: 24px;
-        margin-bottom: 20px;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
-    }
-
-    .hero h1 {
-        margin: 0;
-        font-size: 2rem;
-        font-weight: 900;
-        color: #0f172a;
-    }
-
-    .hero p {
-        color: #475569;
-        margin-top: 8px;
-    }
-
-    .pro-card {
-        border: 1px solid #d7dce2;
-        border-radius: 16px;
-        padding: 18px;
-        margin: 14px 0;
-        background: #ffffff;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
-    }
-
-    .match-title {
-        font-size: 1.2rem;
-        font-weight: 900;
-        color: #0f172a;
-        margin-bottom: 5px;
-    }
-
-    .match-status {
-        color: #64748b;
-        margin-bottom: 10px;
-    }
-
-    .confidence {
-        display: inline-block;
-        padding: 6px 12px;
-        border-radius: 999px;
-        color: white;
-        font-weight: 800;
-        font-size: 0.82rem;
-        margin-bottom: 14px;
-    }
-
-    .green {
-        background: #16a34a;
-    }
-
-    .amber {
-        background: #ca8a04;
-    }
-
-    .red {
-        background: #dc2626;
-    }
-
-    .prob-grid {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 10px;
-        margin-top: 12px;
-    }
-
-    .prob-box {
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 12px;
-        background: #f8fafc;
-    }
-
-    .prob-box span {
-        display: block;
-        color: #64748b;
-        font-size: 0.82rem;
-        margin-bottom: 4px;
-    }
-
-    .prob-box strong {
-        font-size: 1.08rem;
-        color: #0f172a;
-    }
-
-    @media (max-width: 900px) {
-        .prob-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-    }
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
-# FUNÇÕES
-# ============================================================
 
 def nome_limpo(nome):
     return " ".join(str(nome or "").strip().split())
@@ -328,7 +208,6 @@ def extrair_jogos(payload, liga_id):
             {
                 "id": str(event.get("id", "")),
                 "liga": liga_id,
-                "nome": event.get("name", ""),
                 "home": nome_limpo(
                     home.get("team", {}).get("displayName", "Casa")
                 ),
@@ -339,7 +218,6 @@ def extrair_jogos(payload, liga_id):
                 "away_score": placar(away),
                 "data": dt,
                 "status": status_type.get("description", ""),
-                "status_nome": status_type.get("name", ""),
                 "em_jogo": status_type.get("state") == "in",
                 "finalizado": status_type.get("state") == "post",
             }
@@ -399,19 +277,8 @@ def calcular_probabilidades(home, away):
     }
 
 
-# ============================================================
-# INTERFACE
-# ============================================================
-
-st.markdown(
-    """
-<div class="hero">
-    <h1>⚽ Analisador Esportivo Pro</h1>
-    <p>Probabilidades com ESPN API + modelo Poisson simples.</p>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+st.title("⚽ Analisador Esportivo Pro")
+st.caption("Probabilidades com ESPN API + modelo Poisson simples.")
 
 with st.sidebar:
     st.header("Filtros")
@@ -428,7 +295,9 @@ with st.sidebar:
     if usar_data:
         data_escolhida = st.date_input("Data").isoformat()
 
-    st.info("Depois de alterar filtros, aguarde carregar os jogos.")
+    if st.button("Atualizar dados"):
+        st.cache_data.clear()
+        st.rerun()
 
 
 liga_id = LIGAS[liga_nome]
@@ -454,70 +323,56 @@ for jogo in jogos:
     maior = max(probs["home"], probs["draw"], probs["away"])
 
     if maior >= 0.60:
-        conf_class = "green"
-        confianca = "ALTA"
+        confianca = "🟢 ALTA"
     elif maior >= 0.45:
-        conf_class = "amber"
-        confianca = "MÉDIA"
+        confianca = "🟡 MÉDIA"
     else:
-        conf_class = "red"
-        confianca = "BAIXA"
+        confianca = "🔴 BAIXA"
 
-    data_txt = ""
+    data_txt = "Data não informada"
+
     if jogo["data"]:
         data_txt = jogo["data"].strftime("%d/%m/%Y %H:%M")
 
     placar_txt = ""
+
     if jogo["finalizado"] or jogo["em_jogo"]:
         placar_txt = f" — {jogo['home_score']} x {jogo['away_score']}"
 
-    st.markdown(
-        f"""
-<div class="pro-card">
-    <div class="match-title">
-        {jogo["home"]} x {jogo["away"]}{placar_txt}
-    </div>
+    with st.container(border=True):
+        st.markdown(f"### {jogo['home']} x {jogo['away']}{placar_txt}")
+        st.write(f"**Status:** {jogo['status']}")
+        st.write(f"**Data:** {data_txt}")
+        st.write(f"**Confiança:** {confianca}")
 
-    <div class="match-status">
-        Status: {jogo["status"]} &nbsp; | &nbsp; {data_txt}
-    </div>
+        col1, col2, col3, col4, col5 = st.columns(5)
 
-    <div class="confidence {conf_class}">
-        Confiança: {confianca}
-    </div>
+        col1.metric(
+            "Casa",
+            pct(probs["home"]),
+            f"Odd justa {probs['odd_home']:.2f}",
+        )
 
-    <div class="prob-grid">
-        <div class="prob-box">
-            <span>Casa</span>
-            <strong>{pct(probs["home"])}</strong><br>
-            Odd justa: {probs["odd_home"]:.2f}
-        </div>
+        col2.metric(
+            "Empate",
+            pct(probs["draw"]),
+            f"Odd justa {probs['odd_draw']:.2f}",
+        )
 
-        <div class="prob-box">
-            <span>Empate</span>
-            <strong>{pct(probs["draw"])}</strong><br>
-            Odd justa: {probs["odd_draw"]:.2f}
-        </div>
+        col3.metric(
+            "Fora",
+            pct(probs["away"]),
+            f"Odd justa {probs['odd_away']:.2f}",
+        )
 
-        <div class="prob-box">
-            <span>Fora</span>
-            <strong>{pct(probs["away"])}</strong><br>
-            Odd justa: {probs["odd_away"]:.2f}
-        </div>
+        col4.metric(
+            "Over 2.5",
+            pct(probs["over25"]),
+        )
 
-        <div class="prob-box">
-            <span>Over 2.5</span>
-            <strong>{pct(probs["over25"])}</strong>
-        </div>
-
-        <div class="prob-box">
-            <span>Ambos Marcam</span>
-            <strong>{pct(probs["btts"])}</strong>
-        </div>
-    </div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
+        col5.metric(
+            "Ambos marcam",
+            pct(probs["btts"]),
+        )
 
 st.success("Aplicação carregada corretamente.")
