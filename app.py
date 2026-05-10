@@ -605,4 +605,358 @@ def obter_fator_aprendizado(liga_id, codigo):
 
 
 def melhor_mercado_aprendido(probs, jogo):
-    mercados = mercados_disponiveis(probs, jogo["home"], jogo["
+    mercados = mercados_disponiveis(probs, jogo["home"], jogo["away"])
+    ajustados = []
+
+    for nome, codigo, prob in mercados:
+        fator = obter_fator_aprendizado(jogo["liga"], codigo)
+        prob_ajustada = clamp(prob + fator, 0.01, 0.99)
+        ajustados.append((nome, codigo, prob_ajustada, fator, prob))
+
+    return sorted(ajustados, key=lambda x: x[2], reverse=True)[0]
+
+
+def verificar_acerto(mercado, home_score, away_score):
+    total = home_score + away_score
+    ambos = home_score > 0 and away_score > 0
+
+    if not mercado:
+        return False
+
+    if mercado == "Empate":
+        return home_score == away_score
+
+    if mercado == "Dupla chance 1X":
+        return home_score >= away_score
+
+    if mercado == "Dupla chance X2":
+        return away_score >= home_score
+
+    if mercado == "Dupla chance 12":
+        return home_score != away_score
+
+    if mercado == "Over 1.5 gols":
+        return total >= 2
+
+    if mercado == "Over 2.5 gols":
+        return total >= 3
+
+    if mercado == "Under 2.5 gols":
+        return total <= 2
+
+    if mercado == "Ambos marcam":
+        return ambos
+
+    if " vence" in mercado:
+        return (
+            home_score > away_score
+            or away_score > home_score
+        )
+
+    return False
+
+
+def mercado_para_codigo(mercado):
+    mapa = {
+        "Empate": "draw",
+        "Dupla chance 1X": "dupla_1x",
+        "Dupla chance X2": "dupla_x2",
+        "Dupla chance 12": "dupla_12",
+        "Over 1.5 gols": "over15",
+        "Over 2.5 gols": "over25",
+        "Under 2.5 gols": "under25",
+        "Ambos marcam": "btts",
+    }
+
+    if mercado in mapa:
+        return mapa[mercado]
+
+    if " vence" in mercado:
+        return "home"
+
+    return "outro"
+
+
+def treinar_modelo():
+    df = carregar_previsoes()
+
+    if df.empty:
+        return 0
+
+    df = df[df["finalizado"] == 1].copy()
+
+    if df.empty:
+        return 0
+
+    treinados = 0
+
+    df["codigo"] = df["mercado_aprendido"].apply(mercado_para_codigo)
+
+    for codigo in df["codigo"].dropna().unique():
+        sub = df[df["codigo"] == codigo]
+        jogos = len(sub)
+
+        if jogos >= MIN_JOGOS_PARA_APRENDER:
+            acertos = int(sub["acertou_aprendido"].fillna(0).sum())
+            taxa = acertos / jogos
+            fator = clamp((taxa - 0.55) * 0.18, -0.08, 0.08)
+
+            salvar_ajuste(f"mercado:{codigo}", fator, jogos, acertos)
+            treinados += 1
+
+    for liga_id in df["liga_id"].dropna().unique():
+        df_liga = df[df["liga_id"] == liga_id]
+
+        for codigo in df_liga["codigo"].dropna().unique():
+            sub = df_liga[df_liga["codigo"] == codigo]
+            jogos = len(sub)
+
+            if jogos >= MIN_JOGOS_PARA_APRENDER:
+                acertos = int(sub["acertou_aprendido"].fillna(0).sum())
+                taxa = acertos / jogos
+                fator = clamp((taxa - 0.55) * 0.14, -0.06, 0.06)
+
+                salvar_ajuste(f"liga:{liga_id}|mercado:{codigo}", fator, jogos, acertos)
+                treinados += 1
+
+    return treinados
+
+
+# ============================================================
+# APP
+# ============================================================
+
+init_db()
+
+st.title("⚽ Analisador Esportivo Pro 14.0")
+st.caption("Modelo Base vs Modelo Aprendido + Backtest 24h + SQLite automático.")
+
+aba_jogos, aba_backtest, aba_aprendizado = st.tabs(
+    ["Jogos", "Backtest 24h", "Aprendizado"]
+)
+
+with st.sidebar:
+    st.header("Filtros")
+
+    liga_nome = st.selectbox("Liga", list(LIGAS.keys()))
+
+    usar_data = st.checkbox("Filtrar por data")
+    data_escolhida = None
+
+    if usar_data:
+        data_escolhida = st.date_input("Data").isoformat()
+
+    filtro_status = st.selectbox(
+        "Status",
+        ["Todos", "Ao vivo", "Futuros", "Finalizados"],
+    )
+
+    if st.button("Atualizar dados"):
+        st.cache_data.clear()
+        st.rerun()
+
+
+with aba_jogos:
+    liga_id = LIGAS[liga_nome]
+
+    payload, erro = buscar_scoreboard(liga_id, data_escolhida)
+
+    if erro:
+        st.error(erro)
+        st.stop()
+
+    jogos = extrair_jogos(payload, liga_id)
+
+    if filtro_status == "Ao vivo":
+        jogos = [j for j in jogos if j["em_jogo"]]
+    elif filtro_status == "Futuros":
+        jogos = [j for j in jogos if j["futuro"]]
+    elif filtro_status == "Finalizados":
+        jogos = [j for j in jogos if j["finalizado"]]
+
+    if not jogos:
+        st.warning("Nenhum jogo encontrado.")
+    else:
+        st.subheader(f"{liga_nome} — {len(jogos)} jogo(s)")
+
+        resumo = []
+
+        for jogo in jogos:
+            probs = calcular_probabilidades(jogo["home"], jogo["away"])
+
+            base = melhor_mercado_base(probs, jogo["home"], jogo["away"])
+            aprendido = melhor_mercado_aprendido(probs, jogo)
+
+            placar_top = probs["placares"][0]
+            placar_previsto = f"{placar_top[0]} x {placar_top[1]}"
+
+            salvar_previsao(jogo, liga_nome, base, aprendido, placar_previsto)
+
+            if jogo["finalizado"]:
+                atualizar_resultado(jogo)
+
+            mercado_base, codigo_base, prob_base = base
+            mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
+
+            placar_txt = ""
+
+            if jogo["finalizado"] or jogo["em_jogo"]:
+                placar_txt = f" — {jogo['home_score']} x {jogo['away_score']}"
+
+            data_txt = jogo["data"].strftime("%d/%m/%Y %H:%M") if jogo["data"] else "Data não informada"
+
+            resumo.append(
+                {
+                    "Jogo": f"{jogo['home']} x {jogo['away']}",
+                    "Status": status_label(jogo),
+                    "Base": mercado_base,
+                    "Prob. Base": pct(prob_base),
+                    "Aprendido": mercado_ap,
+                    "Prob. Aprendida": pct(prob_ap),
+                    "Ajuste": f"{fator:+.1%}",
+                }
+            )
+
+            with st.container(border=True):
+                st.markdown(f"### {jogo['home']} x {jogo['away']}{placar_txt}")
+                st.write(f"**Status:** {status_label(jogo)}")
+                st.write(f"**Data:** {data_txt}")
+
+                c1, c2 = st.columns(2)
+                c1.info(f"Modelo Base: **{mercado_base}** — {pct(prob_base)}")
+                c2.success(f"Modelo Aprendido: **{mercado_ap}** — {pct(prob_ap)} | Ajuste {fator:+.1%}")
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Força casa", probs["forca_home"])
+                c2.metric("Força fora", probs["forca_away"])
+                c3.metric("Placar provável", placar_previsto)
+
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Casa", pct(probs["home"]), f"Odd {odd_justa(probs['home']):.2f}")
+                c2.metric("Empate", pct(probs["draw"]), f"Odd {odd_justa(probs['draw']):.2f}")
+                c3.metric("Fora", pct(probs["away"]), f"Odd {odd_justa(probs['away']):.2f}")
+                c4.metric("Over 2.5", pct(probs["over25"]), f"Odd {odd_justa(probs['over25']):.2f}")
+                c5.metric("BTTS", pct(probs["btts"]), f"Odd {odd_justa(probs['btts']):.2f}")
+
+        st.subheader("Resumo")
+        st.dataframe(pd.DataFrame(resumo), use_container_width=True, hide_index=True)
+
+
+with aba_backtest:
+    st.subheader("📊 Backtest — Últimas 24h")
+
+    if st.button("Rodar backtest 24h"):
+        jogos_24h = buscar_jogos_ultimas_24h()
+        finalizados = [j for j in jogos_24h if j["finalizado"]]
+
+        linhas = []
+
+        for jogo in finalizados:
+            probs = calcular_probabilidades(jogo["home"], jogo["away"])
+
+            base = melhor_mercado_base(probs, jogo["home"], jogo["away"])
+            aprendido = melhor_mercado_aprendido(probs, jogo)
+
+            placar_previsto = f"{probs['placares'][0][0]} x {probs['placares'][0][1]}"
+
+            salvar_previsao(
+                jogo,
+                jogo.get("liga_nome", jogo["liga"]),
+                base,
+                aprendido,
+                placar_previsto,
+            )
+
+            atualizar_resultado(jogo)
+
+            mercado_base, codigo_base, prob_base = base
+            mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
+
+            acertou_base = verificar_acerto(
+                mercado_base,
+                jogo["home_score"],
+                jogo["away_score"],
+            )
+
+            acertou_ap = verificar_acerto(
+                mercado_ap,
+                jogo["home_score"],
+                jogo["away_score"],
+            )
+
+            linhas.append(
+                {
+                    "Liga": jogo.get("liga_nome", jogo["liga"]),
+                    "Jogo": f"{jogo['home']} x {jogo['away']}",
+                    "Placar": f"{jogo['home_score']} x {jogo['away_score']}",
+                    "Base": mercado_base,
+                    "Base Prob.": pct(prob_base),
+                    "Base Resultado": "✅" if acertou_base else "❌",
+                    "Aprendido": mercado_ap,
+                    "Aprendido Prob.": pct(prob_ap),
+                    "Aprendido Resultado": "✅" if acertou_ap else "❌",
+                    "Ganho": "✅ +1" if acertou_ap and not acertou_base else "❌ -1" if acertou_base and not acertou_ap else "0",
+                }
+            )
+
+        if not linhas:
+            st.warning("Nenhum jogo finalizado encontrado nas últimas 24h.")
+        else:
+            df_bt = pd.DataFrame(linhas)
+
+            acertos_base = (df_bt["Base Resultado"] == "✅").sum()
+            acertos_ap = (df_bt["Aprendido Resultado"] == "✅").sum()
+            total = len(df_bt)
+            ganho = acertos_ap - acertos_base
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Jogos analisados", total)
+            c2.metric("Base", f"{acertos_base}/{total}", pct(acertos_base / total))
+            c3.metric("Aprendido", f"{acertos_ap}/{total}", pct(acertos_ap / total))
+            c4.metric("Ganho líquido", ganho)
+
+            st.dataframe(df_bt, use_container_width=True, hide_index=True)
+
+
+with aba_aprendizado:
+    st.subheader("🧠 Aprendizado")
+
+    df = carregar_previsoes()
+
+    if df.empty:
+        st.info("Ainda não há previsões salvas.")
+    else:
+        finalizados = df[df["finalizado"] == 1].copy()
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.metric("Previsões salvas", len(df))
+        c2.metric("Finalizados", len(finalizados))
+
+        if len(finalizados) > 0:
+            base_acc = finalizados["acertou_base"].fillna(0).sum() / len(finalizados)
+            ap_acc = finalizados["acertou_aprendido"].fillna(0).sum() / len(finalizados)
+            ganho = finalizados["acertou_aprendido"].fillna(0).sum() - finalizados["acertou_base"].fillna(0).sum()
+        else:
+            base_acc = 0
+            ap_acc = 0
+            ganho = 0
+
+        c3.metric("Base histórica", pct(base_acc))
+        c4.metric("Aprendido histórico", pct(ap_acc), f"Ganho {int(ganho)}")
+
+        if st.button("Treinar com histórico salvo"):
+            qtd = treinar_modelo()
+            st.success(f"Treinamento concluído. Ajustes atualizados: {qtd}")
+            st.rerun()
+
+        st.subheader("Ajustes aprendidos")
+        ajustes = carregar_ajustes()
+
+        if ajustes.empty:
+            st.info("Nenhum ajuste aprendido ainda.")
+        else:
+            st.dataframe(ajustes, use_container_width=True, hide_index=True)
+
+        st.subheader("Histórico")
+        st.dataframe(df, use_container_width=True, hide_index=True)
