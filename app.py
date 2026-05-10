@@ -2,6 +2,7 @@ import math
 import re
 import unicodedata
 from datetime import datetime, timedelta
+from textwrap import dedent
 
 import requests
 import streamlit as st
@@ -12,7 +13,7 @@ import streamlit as st
 # ============================================================
 
 st.set_page_config(
-    page_title="Analisador Esportivo Pro 12.0",
+    page_title="Analisador Esportivo Pro 12.1",
     page_icon="⚽",
     layout="wide",
 )
@@ -23,7 +24,7 @@ st.set_page_config(
 # ============================================================
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
-HEADERS = {"User-Agent": "AnalisadorEsportivoPro/12.0"}
+HEADERS = {"User-Agent": "AnalisadorEsportivoPro/12.1"}
 
 MAX_GOLS = 10
 RETRIES = 2
@@ -121,211 +122,213 @@ CLASSICOS = {
 
 
 # ============================================================
-# ESTILO
+# CSS
 # ============================================================
 
 st.markdown(
-    """
-<style>
-    .main {
-        background-color: #f8fafc;
-        color: #111827;
-    }
+    dedent(
+        """
+        <style>
+            .main {
+                background-color: #f8fafc;
+                color: #111827;
+            }
 
-    .block-container {
-        padding-top: 1.2rem;
-        max-width: 1450px;
-    }
+            .block-container {
+                padding-top: 1.2rem;
+                max-width: 1450px;
+            }
 
-    section[data-testid="stSidebar"] {
-        background: #eef2f7;
-        border-right: 1px solid #d7dce2;
-    }
+            section[data-testid="stSidebar"] {
+                background: #eef2f7;
+                border-right: 1px solid #d7dce2;
+            }
 
-    .hero {
-        border: 1px solid #d7dce2;
-        background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
-        border-radius: 18px;
-        padding: 24px 26px;
-        margin-bottom: 20px;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
-    }
+            .hero {
+                border: 1px solid #d7dce2;
+                background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+                border-radius: 18px;
+                padding: 24px 26px;
+                margin-bottom: 20px;
+                box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+            }
 
-    .hero h1 {
-        margin: 0;
-        font-size: 2.15rem;
-        font-weight: 900;
-        letter-spacing: -0.03em;
-        color: #0f172a;
-    }
+            .hero h1 {
+                margin: 0;
+                font-size: 2.15rem;
+                font-weight: 900;
+                letter-spacing: -0.03em;
+                color: #0f172a;
+            }
 
-    .hero p {
-        margin: 8px 0 0;
-        color: #475569;
-        font-size: 1rem;
-    }
+            .hero p {
+                margin: 8px 0 0;
+                color: #475569;
+                font-size: 1rem;
+            }
 
-    .section-title {
-        font-size: 1.25rem;
-        font-weight: 900;
-        color: #0f172a;
-        margin: 16px 0 8px;
-    }
+            .section-title {
+                font-size: 1.25rem;
+                font-weight: 900;
+                color: #0f172a;
+                margin: 16px 0 8px;
+            }
 
-    .pro-card {
-        border: 1px solid #d7dce2;
-        border-radius: 16px;
-        padding: 18px 20px;
-        margin: 14px 0;
-        background: #ffffff;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
-    }
+            .pro-card {
+                border: 1px solid #d7dce2;
+                border-radius: 16px;
+                padding: 18px 20px;
+                margin: 14px 0;
+                background: #ffffff;
+                box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+            }
 
-    .pro-card.live {
-        border-left: 7px solid #2563eb;
-    }
+            .pro-card.live {
+                border-left: 7px solid #2563eb;
+            }
 
-    .pro-card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 16px;
-        margin-bottom: 14px;
-    }
+            .pro-card-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+                gap: 16px;
+                margin-bottom: 14px;
+            }
 
-    .match-title {
-        font-size: 1.18rem;
-        font-weight: 900;
-        color: #0f172a;
-    }
+            .match-title {
+                font-size: 1.18rem;
+                font-weight: 900;
+                color: #0f172a;
+            }
 
-    .match-subtitle {
-        color: #64748b;
-        font-size: 0.88rem;
-        margin-top: 4px;
-    }
+            .match-subtitle {
+                color: #64748b;
+                font-size: 0.88rem;
+                margin-top: 4px;
+            }
 
-    .confidence {
-        padding: 6px 12px;
-        border-radius: 999px;
-        color: white;
-        font-size: 0.82rem;
-        font-weight: 800;
-        white-space: nowrap;
-    }
+            .confidence {
+                padding: 6px 12px;
+                border-radius: 999px;
+                color: white;
+                font-size: 0.82rem;
+                font-weight: 800;
+                white-space: nowrap;
+            }
 
-    .confidence.green {
-        background: #16a34a;
-    }
+            .confidence.green {
+                background: #16a34a;
+            }
 
-    .confidence.amber {
-        background: #ca8a04;
-    }
+            .confidence.amber {
+                background: #ca8a04;
+            }
 
-    .confidence.red {
-        background: #dc2626;
-    }
+            .confidence.red {
+                background: #dc2626;
+            }
 
-    .market-highlight {
-        border-radius: 12px;
-        background: #f1f5f9;
-        border: 1px solid #e2e8f0;
-        padding: 10px 12px;
-        margin-bottom: 14px;
-        color: #334155;
-    }
+            .market-highlight {
+                border-radius: 12px;
+                background: #f1f5f9;
+                border: 1px solid #e2e8f0;
+                padding: 10px 12px;
+                margin-bottom: 14px;
+                color: #334155;
+            }
 
-    .prob-grid {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 10px;
-        margin-bottom: 12px;
-    }
+            .prob-grid {
+                display: grid;
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 10px;
+                margin-bottom: 12px;
+            }
 
-    .prob-grid div {
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 10px;
-        background: #ffffff;
-    }
+            .prob-grid div {
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 10px;
+                background: #ffffff;
+            }
 
-    .prob-grid span {
-        display: block;
-        font-size: 0.78rem;
-        color: #64748b;
-        margin-bottom: 3px;
-    }
+            .prob-grid span {
+                display: block;
+                font-size: 0.78rem;
+                color: #64748b;
+                margin-bottom: 3px;
+            }
 
-    .prob-grid strong {
-        font-size: 1rem;
-        color: #0f172a;
-    }
+            .prob-grid strong {
+                font-size: 1rem;
+                color: #0f172a;
+            }
 
-    .card-footer {
-        font-size: 0.88rem;
-        color: #475569;
-        border-top: 1px solid #e2e8f0;
-        padding-top: 10px;
-        line-height: 1.6;
-    }
+            .card-footer {
+                font-size: 0.88rem;
+                color: #475569;
+                border-top: 1px solid #e2e8f0;
+                padding-top: 10px;
+                line-height: 1.6;
+            }
 
-    .live-badge {
-        background: #dc2626;
-        color: white;
-        padding: 3px 8px;
-        border-radius: 999px;
-        font-weight: 800;
-        font-size: 0.72rem;
-        margin-left: 8px;
-    }
+            .live-badge {
+                background: #dc2626;
+                color: white;
+                padding: 3px 8px;
+                border-radius: 999px;
+                font-weight: 800;
+                font-size: 0.72rem;
+                margin-left: 8px;
+            }
 
-    .pill {
-        display: inline-block;
-        padding: 4px 9px;
-        margin: 4px 5px 0 0;
-        border-radius: 999px;
-        background: #eef2f7;
-        border: 1px solid #d7dce2;
-        font-size: .84rem;
-        color: #334155;
-    }
+            .pill {
+                display: inline-block;
+                padding: 4px 9px;
+                margin: 4px 5px 0 0;
+                border-radius: 999px;
+                background: #eef2f7;
+                border: 1px solid #d7dce2;
+                font-size: .84rem;
+                color: #334155;
+            }
 
-    .form-badge {
-        display: inline-block;
-        width: 22px;
-        height: 22px;
-        line-height: 22px;
-        text-align: center;
-        border-radius: 6px;
-        font-size: 0.78rem;
-        font-weight: 900;
-        margin-right: 3px;
-        color: white;
-    }
+            .form-badge {
+                display: inline-block;
+                width: 22px;
+                height: 22px;
+                line-height: 22px;
+                text-align: center;
+                border-radius: 6px;
+                font-size: 0.78rem;
+                font-weight: 900;
+                margin-right: 3px;
+                color: white;
+            }
 
-    .form-v {
-        background: #16a34a;
-    }
+            .form-v {
+                background: #16a34a;
+            }
 
-    .form-e {
-        background: #eab308;
-    }
+            .form-e {
+                background: #eab308;
+            }
 
-    .form-d {
-        background: #dc2626;
-    }
+            .form-d {
+                background: #dc2626;
+            }
 
-    @media (max-width: 900px) {
-        .prob-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
+            @media (max-width: 900px) {
+                .prob-grid {
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                }
 
-        .pro-card-header {
-            flex-direction: column;
-        }
-    }
-</style>
-""",
+                .pro-card-header {
+                    flex-direction: column;
+                }
+            }
+        </style>
+        """
+    ),
     unsafe_allow_html=True,
 )
 
@@ -771,6 +774,7 @@ def calcular_cartoes_escanteios(m_h, m_a, p_empate, riscos):
         2.4,
         7.2,
     )
+
     cartoes_home = cartoes_total * clamp(
         0.49 + 0.06 * (m_a - m_h),
         0.38,
@@ -782,6 +786,7 @@ def calcular_cartoes_escanteios(m_h, m_a, p_empate, riscos):
         6.0,
         13.5,
     )
+
     escanteios_home = escanteios_total * clamp(
         0.54 + 0.08 * (m_h - m_a),
         0.40,
@@ -917,8 +922,6 @@ def prever_jogo(
         if i == j
     )
 
-    # Correção profissional do BTTS:
-    # BTTS = P(casa marca >= 1 e fora marca >= 1)
     prob_home_zero = sum(mat[0][j] for j in range(MAX_GOLS + 1))
     prob_away_zero = sum(mat[i][0] for i in range(MAX_GOLS + 1))
     prob_zero_zero = mat[0][0]
@@ -981,14 +984,16 @@ def prever_jogo(
 
 
 # ============================================================
-# LAYOUT E COMPONENTES
+# COMPONENTES DE LAYOUT
 # ============================================================
 
 def classificar_confianca(prob):
     if prob >= 0.62:
         return "Alta", "green"
+
     if prob >= 0.54:
         return "Média", "amber"
+
     return "Baixa", "red"
 
 
@@ -1031,56 +1036,71 @@ def render_card_jogo(jogo, pred):
 
     cart = pred["cartoes"]
 
-    st.markdown(
-        f"""
-        <div class="pro-card {live_class}">
-            <div class="pro-card-header">
-                <div>
-                    <div class="match-title">
-                        {pred["home"]} vs {pred["away"]} {live_tag}
-                    </div>
-                    <div class="match-subtitle">
-                        📅 {jogo["data_txt"]} · {jogo.get("status", "")}
-                    </div>
-                </div>
-                <div class="confidence {confianca_cor}">
-                    Confiança {confianca_txt}
-                </div>
+    html = f"""
+<div class="pro-card {live_class}">
+    <div class="pro-card-header">
+        <div>
+            <div class="match-title">
+                {pred["home"]} vs {pred["away"]} {live_tag}
             </div>
-
-            <div class="market-highlight">
-                Melhor mercado: <strong>{mercado_nome}</strong> ·
-                Probabilidade {pct(mercado_prob)} ·
-                Odd justa {mercado_odd:.2f}
-            </div>
-
-            <div class="prob-grid">
-                <div><span>Casa</span><strong>{pct(pred["prob_home"])}</strong></div>
-                <div><span>Empate</span><strong>{pct(pred["prob_empate"])}</strong></div>
-                <div><span>Fora</span><strong>{pct(pred["prob_away"])}</strong></div>
-                <div><span>BTTS</span><strong>{pct(pred["prob_btts"])}</strong></div>
-                <div><span>Over 2.5</span><strong>{pct(pred["prob_over25"])}</strong></div>
-            </div>
-
-            <div class="card-footer">
-                🎯 Placar provável: <strong>{placar_str}</strong> ({pct(prob_placar)}) ·
-                Gols esperados: <strong>{pred["m_h"]}</strong> x <strong>{pred["m_a"]}</strong>
-                <br>
-                🏠 Forma {pred["home"]}: {forma_h}
-                <br>
-                🚌 Forma {pred["away"]}: {forma_a}
-                <br>
-                <span class="pill">🟨 Cartões: {cart["cartoes_total"]:.1f}</span>
-                <span class="pill">Over 3.5 cartões: {pct(cart["over_35_cartoes"])}</span>
-                <span class="pill">⚽ Escanteios: {cart["escanteios_total"]:.1f}</span>
-                <span class="pill">Over 9.5 escanteios: {pct(cart["over_95_escanteios"])}</span>
-                <br>
-                ⚠️ Risco: <strong>{riscos}</strong>
+            <div class="match-subtitle">
+                📅 {jogo["data_txt"]} · {jogo.get("status", "")}
             </div>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+
+        <div class="confidence {confianca_cor}">
+            Confiança {confianca_txt}
+        </div>
+    </div>
+
+    <div class="market-highlight">
+        Melhor mercado: <strong>{mercado_nome}</strong> ·
+        Probabilidade {pct(mercado_prob)} ·
+        Odd justa {mercado_odd:.2f}
+    </div>
+
+    <div class="prob-grid">
+        <div>
+            <span>Casa</span>
+            <strong>{pct(pred["prob_home"])}</strong>
+        </div>
+        <div>
+            <span>Empate</span>
+            <strong>{pct(pred["prob_empate"])}</strong>
+        </div>
+        <div>
+            <span>Fora</span>
+            <strong>{pct(pred["prob_away"])}</strong>
+        </div>
+        <div>
+            <span>BTTS</span>
+            <strong>{pct(pred["prob_btts"])}</strong>
+        </div>
+        <div>
+            <span>Over 2.5</span>
+            <strong>{pct(pred["prob_over25"])}</strong>
+        </div>
+    </div>
+
+    <div class="card-footer">
+        🎯 Placar provável: <strong>{placar_str}</strong> ({pct(prob_placar)}) ·
+        Gols esperados: <strong>{pred["m_h"]}</strong> x <strong>{pred["m_a"]}</strong>
+        <br>
+        🏠 Forma {pred["home"]}: {forma_h}
+        <br>
+        🚌 Forma {pred["away"]}: {forma_a}
+        <br>
+        <span class="pill">🟨 Cartões: {cart["cartoes_total"]:.1f}</span>
+        <span class="pill">Over 3.5 cartões: {pct(cart["over_35_cartoes"])}</span>
+        <span class="pill">⚽ Escanteios: {cart["escanteios_total"]:.1f}</span>
+        <span class="pill">Over 9.5 escanteios: {pct(cart["over_95_escanteios"])}</span>
+        <br>
+        ⚠️ Risco: <strong>{riscos}</strong>
+    </div>
+</div>
+"""
+
+    st.markdown(dedent(html), unsafe_allow_html=True)
 
 
 def montar_previsoes(futuros, contexto, posicoes, formas):
@@ -1093,6 +1113,7 @@ def montar_previsoes(futuros, contexto, posicoes, formas):
             posicoes=posicoes,
             formas=formas,
         )
+
         mercado_nome, mercado_prob, mercado_odd = melhor_mercado(pred)
 
         previsoes.append(
@@ -1114,12 +1135,14 @@ def montar_previsoes(futuros, contexto, posicoes, formas):
 
 def main():
     st.markdown(
-        """
-        <div class="hero">
-            <h1>⚽ Analisador Esportivo Pro 12.0</h1>
-            <p>Dashboard profissional de probabilidades, odds justas, risco e oportunidades.</p>
-        </div>
-        """,
+        dedent(
+            """
+            <div class="hero">
+                <h1>⚽ Analisador Esportivo Pro 12.1</h1>
+                <p>Dashboard profissional de probabilidades, odds justas, risco e oportunidades.</p>
+            </div>
+            """
+        ),
         unsafe_allow_html=True,
     )
 
@@ -1233,12 +1256,14 @@ def main():
 
     total_jogos = len(previsoes)
     total_ao_vivo = sum(1 for p in previsoes if p["pred"].get("live"))
+
     jogos_hoje = sum(
         1
         for p in previsoes
         if p["jogo"].get("data")
         and p["jogo"]["data"].date() == hoje()
     )
+
     oportunidades_qtd = sum(
         1
         for p in previsoes
@@ -1266,7 +1291,11 @@ def main():
 
     with aba1:
         st.markdown(
-            '<div class="section-title">📊 Jogos analisados</div>',
+            dedent(
+                """
+                <div class="section-title">📊 Jogos analisados</div>
+                """
+            ),
             unsafe_allow_html=True,
         )
 
@@ -1278,7 +1307,11 @@ def main():
 
     with aba2:
         st.markdown(
-            '<div class="section-title">🎯 Melhores oportunidades</div>',
+            dedent(
+                """
+                <div class="section-title">🎯 Melhores oportunidades</div>
+                """
+            ),
             unsafe_allow_html=True,
         )
 
@@ -1303,7 +1336,11 @@ def main():
 
     with aba3:
         st.markdown(
-            '<div class="section-title">⚙️ Diagnóstico do modelo</div>',
+            dedent(
+                """
+                <div class="section-title">⚙️ Diagnóstico do modelo</div>
+                """
+            ),
             unsafe_allow_html=True,
         )
 
