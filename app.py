@@ -1,7 +1,7 @@
-
 import math
 import re
 import unicodedata
+import textwrap
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 
@@ -1202,7 +1202,7 @@ def render_card(jogo, r, posicoes, formas):
 
     riscos = ", ".join(r["riscos"]) if r["riscos"] else "baixo risco"
 
-    html_card = f"""
+    html_card = textwrap.dedent(f"""
     <div class="card {card_class}">
         <div class="card-title">{home} x {away}{placar_str}</div>
 
@@ -1247,7 +1247,7 @@ def render_card(jogo, r, posicoes, formas):
         <span class="pill">Amostra: <strong>{r['amostra']}</strong></span>
         <span class="pill">Alertas: <strong>{riscos}</strong></span>
     </div>
-    """
+    """).strip()
 
     st.markdown(html_card, unsafe_allow_html=True)
 
@@ -1292,14 +1292,14 @@ def render_value_box(titulo, prob, odd, banca):
     color = "#16a34a" if ev > 0 else "#dc2626"
 
     st.markdown(
-        f"""
+        textwrap.dedent(f"""
     <div style="border:1px solid #d7dce2; border-radius:8px; padding:10px; margin:5px 0; background:#f8fafc;">
         <strong>{titulo}</strong><br>
         <span>Probabilidade: {pct(prob)} | Odd informada: {odd:.2f} | Odd justa: {odd_justa(prob):.2f}</span><br>
         <span style="color:{color}; font-weight:bold;">EV: {ev:+.2f}</span> |
         <span>Stake sugerido (Kelly 25%): R$ {stake:.2f}</span>
     </div>
-    """,
+    """).strip(),
         unsafe_allow_html=True,
     )
 
@@ -1577,12 +1577,12 @@ def pagina_backtest(
 
 def main():
     st.markdown(
-        """
+        textwrap.dedent("""
 <div class="hero">
     <h1>⚽ Analisador Esportivo Pro 11.0</h1>
     <p>Modelo com Elo dinâmico, lambda multiplicativo, suavização, Dixon-Coles simplificado e backtest histórico.</p>
 </div>
-""",
+""").strip(),
         unsafe_allow_html=True,
     )
 
