@@ -417,7 +417,6 @@ def extrair_jogos(payload, liga_id):
         home = next((c for c in competidores if c.get("homeAway") == "home"), competidores[0])
         away = next((c for c in competidores if c.get("homeAway") == "away"), competidores[1])
 
-        # CORREÇÃO: status pode ser None
         status_raw = event.get("status") or {}
         status_type = status_raw.get("type", {})
 
@@ -509,20 +508,22 @@ def obter_posicao(posicoes, time, padrao=10):
 
 
 def forca_inicial(time, posicoes=None):
+    """Atribui rating Elo inicial. Times desconhecidos recebem penalização fixa."""
     nt = key_time(time)
 
+    # 1. Se há posição na tabela da liga, usar ranking decrescente
     if posicoes:
         pos = obter_posicao(posicoes, time, padrao=None)
-
         if pos is not None:
             return 1850 - (pos - 1) * 22
 
+    # 2. Se está na lista de força conhecida, usar seu valor
     for nome, valor in FORCA_BASE.items():
         if key_time(nome) == nt:
             return 1650 + valor * 2
 
-    seed = sum(ord(c) for c in nome_limpo(time))
-    return ELO_BASE + (seed % 160) - 80
+    # 3. Time desconhecido / divisão inferior → rating bem mais baixo
+    return ELO_BASE - 200  # 1500 no nosso caso
 
 
 def media_time(stats, time, campo, padrao, prior=8):
@@ -564,7 +565,6 @@ def atualizar_contexto_com_jogo(ctx, jogo, posicoes=None, home_adv=DEFAULT_HOME_
     jogos_a = ctx["stats"][ak]["jogos"]
     experiencia_media = (jogos_h + jogos_a) / 2
 
-    # K dinâmico: aprende mais no começo e estabiliza depois.
     k = clamp(22 - experiencia_media * 0.45, 10, 18)
 
     exp_home = 1 / (1 + 10 ** ((ctx["ratings"][ak] - (ctx["ratings"][hk] + home_adv)) / 400))
@@ -662,7 +662,8 @@ def calcular_pontos_forma(forma):
     return pts, " ".join(forma)
 
 
-def matriz_poisson(m_h, m_a, rho=DEFAULT_RHO_DC):
+def matriz_poisson(m_h, m_a, rho=DEFAULT_RHO_DC, diff_rating=0):
+    """Matriz de Poisson com correção Dixon-Coles apenas para jogos equilibrados."""
     mat = [
         [
             poisson_pmf(i, m_h) * poisson_pmf(j, m_a)
@@ -671,8 +672,8 @@ def matriz_poisson(m_h, m_a, rho=DEFAULT_RHO_DC):
         for i in range(MAX_GOLS + 1)
     ]
 
-    # Dixon-Coles simplificado: corrige correlação em placares baixos.
-    if m_h > 0 and m_a > 0:
+    # Só corrigimos se a diferença de força for pequena (jogo equilibrado)
+    if abs(diff_rating) < 150 and m_h > 0 and m_a > 0:
         ajustes = {
             (0, 0): 1 - (m_h * m_a * rho),
             (0, 1): 1 + (m_h * rho),
@@ -745,27 +746,42 @@ def prever_jogo(
     # 1. Ratings Elo
     rating_h = contexto["ratings"].get(hk, forca_inicial(home, posicoes))
     rating_a = contexto["ratings"].get(ak, forca_inicial(away, posicoes))
-    diff = (rating_h + home_adv) - rating_a
+
+    # Rating médio da liga
+    if contexto["ratings"]:
+        league_avg = sum(contexto["ratings"].values()) / len(contexto["ratings"])
+    else:
+        league_avg = ELO_BASE
+
+    # Ajuste de home advantage com bônus para diferença grande
+    diff_rating = (rating_h + home_adv) - rating_a
+    home_adv_ajustado = home_adv + max(0, (diff_rating - 150) * 0.1)
 
     # 2. Médias base da liga
     media_h_liga = contexto.get("media_home", 1.35)
     media_a_liga = contexto.get("media_away", 1.05)
 
-    # 3. Estatísticas específicas de cada time (com prior bayesiano)
+    # 3. Estatísticas específicas com prior bayesiano adaptativo
     stats_h = contexto["stats"].get(hk, novo_stats())
     stats_a = contexto["stats"].get(ak, novo_stats())
 
     prior_jogos = 8
-    atk_h = (stats_h["home_gf"] + prior_jogos * media_h_liga) / max(1, stats_h["home_j"] + prior_jogos)
-    def_a = (stats_a["away_ga"] + prior_jogos * media_h_liga) / max(1, stats_a["away_j"] + prior_jogos)
-    def_h = (stats_h["home_ga"] + prior_jogos * media_a_liga) / max(1, stats_h["home_j"] + prior_jogos)
-    atk_a = (stats_a["away_gf"] + prior_jogos * media_a_liga) / max(1, stats_a["away_j"] + prior_jogos)
+    # Fatores baseados na força relativa
+    fator_atk_h = clamp(rating_h / league_avg, 0.6, 1.6)
+    fator_atk_a = clamp(rating_a / league_avg, 0.6, 1.6)
+    fator_def_h = clamp(league_avg / rating_h, 0.6, 1.6)  # time forte defende melhor (espera menos gols)
+    fator_def_a = clamp(league_avg / rating_a, 0.6, 1.6)
 
-    # 4. Médias Poisson base (método de decomposição ataque/defesa)
+    atk_h = (stats_h["home_gf"] + prior_jogos * media_h_liga * fator_atk_h) / max(1, stats_h["home_j"] + prior_jogos)
+    def_a  = (stats_a["away_ga"] + prior_jogos * media_h_liga * fator_def_a) / max(1, stats_a["away_j"] + prior_jogos)
+    def_h  = (stats_h["home_ga"] + prior_jogos * media_a_liga * fator_def_h) / max(1, stats_h["home_j"] + prior_jogos)
+    atk_a = (stats_a["away_gf"] + prior_jogos * media_a_liga * fator_atk_a) / max(1, stats_a["away_j"] + prior_jogos)
+
+    # 4. Médias Poisson base
     m_h_base = atk_h * def_a / media_h_liga
     m_a_base = atk_a * def_h / media_a_liga
 
-    # 5. Ajuste por forma recente (últimos 5 jogos)
+    # 5. Ajuste por forma recente
     fator_forma_h = 1.0
     fator_forma_a = 1.0
     if formas:
@@ -774,10 +790,10 @@ def prever_jogo(
         fator_forma_h = 1 + (pts_h - 7.5) * 0.013
         fator_forma_a = 1 + (pts_a - 7.5) * 0.013
 
-    # 6. Ajuste por força Elo (diferença afeta total de gols)
-    fator_elo = 1 + diff * 0.0008
+    # 6. Ajuste por força Elo
+    fator_elo = 1 + diff_rating * 0.0008
 
-    # 7. Ajuste extra por clássicos
+    # 7. Clássicos reduzem a diferença
     riscos = []
     if tuple(sorted([hk, ak])) in CLASSICOS:
         riscos.append("clássico")
@@ -787,26 +803,23 @@ def prever_jogo(
     m_h = m_h_base * fator_forma_h * fator_elo + ajuste_h + desf_h * 0.1
     m_a = m_a_base * fator_forma_a / fator_elo + ajuste_a + desf_a * 0.1
 
-    # Garantir mínimo de gols esperados
     m_h = max(0.3, m_h)
     m_a = max(0.2, m_a)
 
-    # 9. Matriz de probabilidades (Poisson + Dixon-Coles)
-    mat = matriz_poisson(m_h, m_a)
+    # 9. Matriz de probabilidades (Poisson + DC condicional)
+    mat = matriz_poisson(m_h, m_a, rho=DEFAULT_RHO_DC, diff_rating=diff_rating)
 
     # Probabilidades 1X2
     prob_home = sum(mat[i][j] for i in range(MAX_GOLS+1) for j in range(MAX_GOLS+1) if i > j)
     prob_away = sum(mat[i][j] for i in range(MAX_GOLS+1) for j in range(MAX_GOLS+1) if i < j)
     prob_empate = sum(mat[i][j] for i in range(MAX_GOLS+1) for j in range(MAX_GOLS+1) if i == j)
 
-    # Ambas marcam (BTTS)
     prob_btts_no = mat[0][0]
     prob_btts_yes = 1 - prob_btts_no
 
-    # Over 2.5 gols
     prob_over25 = sum(mat[i][j] for i in range(MAX_GOLS+1) for j in range(MAX_GOLS+1) if i+j > 2)
 
-    # Placar exato mais provável
+    # Placar mais provável
     placares = [
         ((i, j), mat[i][j])
         for i in range(MAX_GOLS+1) for j in range(MAX_GOLS+1)
@@ -814,7 +827,6 @@ def prever_jogo(
     placares.sort(key=lambda x: -x[1])
     placar_top = placares[0]
 
-    # Cartões e escanteios
     extras = calcular_cartoes_escanteios(m_h, m_a, prob_empate, riscos)
 
     resultado = {
@@ -869,13 +881,10 @@ def main():
             st.warning("Nenhum jogo encontrado no período.")
             return
 
-        # Classificação (para força inicial)
         posicoes = buscar_classificacao(liga_id) if "cop" not in liga_id and "champions" not in liga_id else {}
 
-        # Contexto (aprende com jogos já encerrados)
         contexto = construir_contexto(jogos, posicoes=posicoes)
 
-        # Forma dos times para os últimos 5 jogos (apenas encerrados)
         formas = {}
         todos_times = set()
         for j in jogos:
@@ -885,7 +894,6 @@ def main():
         for t in todos_times:
             formas[t] = calcular_forma(jogos, t)
 
-        # Separa jogos futuros / ao vivo
         agora = datetime.now()
         futuros = [j for j in jogos if j.get("data") and j["data"] > agora and not j.get("completed")]
 
@@ -898,7 +906,6 @@ def main():
         for jogo in sorted(futuros, key=lambda x: x["data"]):
             pred = prever_jogo(jogo, contexto, posicoes=posicoes, formas=formas)
 
-            # Exibição visual (cards)
             with st.container():
                 live_tag = '<span class="live-badge">AO VIVO</span>' if pred["live"] else ""
                 st.markdown(
@@ -931,12 +938,10 @@ def main():
                     st.metric("Over 2.5 gols", pct(pred["prob_over25"]))
                     st.metric("Fair Odd Over 2.5", f"{pred['fair_odd_over25']:.2f}")
 
-                # Placar mais provável
                 placar_str = f"{pred['placar_provavel'][0][0]} - {pred['placar_provavel'][0][1]}"
                 prob_placar = pred['placar_provavel'][1]
                 st.caption(f"🎯 Placar mais provável: **{placar_str}** ({pct(prob_placar)})")
 
-                # Forma recente
                 if pred["forma_h"]:
                     badges = "".join(f'<span class="form-badge form-{r.lower()}">{r}</span>' for r in pred["forma_h"])
                     st.markdown(f"🏠 Forma {pred['home']}: {badges}", unsafe_allow_html=True)
@@ -944,7 +949,6 @@ def main():
                     badges = "".join(f'<span class="form-badge form-{r.lower()}">{r}</span>' for r in pred["forma_a"])
                     st.markdown(f"🚌 Forma {pred['away']}: {badges}", unsafe_allow_html=True)
 
-                # Cartões e escanteios
                 cart = pred["cartoes"]
                 st.markdown(
                     f"""
@@ -958,14 +962,12 @@ def main():
                     unsafe_allow_html=True,
                 )
 
-                # Riscos especiais
                 if pred["riscos"]:
                     st.markdown(f"⚠️ **Fatores especiais:** {', '.join(pred['riscos'])}")
 
-                st.markdown("</div>", unsafe_allow_html=True)  # fecha card
+                st.markdown("</div>", unsafe_allow_html=True)
                 st.write("---")
 
-        # Log de erros (se houver)
         if logs:
             with st.expander("⚠️ Log de erros da API"):
                 for l in logs:
