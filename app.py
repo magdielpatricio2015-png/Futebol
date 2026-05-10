@@ -124,7 +124,7 @@ CLASSICOS = {
 # CSS
 # ============================================================
 
-st.html(
+st.markdown(
     """
 <style>
     .main {
@@ -325,7 +325,8 @@ st.html(
         }
     }
 </style>
-"""
+""",
+    unsafe_allow_html=True,
 )
 
 
@@ -1045,7 +1046,7 @@ def render_card_jogo(jogo, pred):
 </div>
 """
 
-    st.html(html)
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def montar_previsoes(futuros, contexto, posicoes, formas):
@@ -1079,13 +1080,14 @@ def montar_previsoes(futuros, contexto, posicoes, formas):
 # ============================================================
 
 def main():
-    st.html(
+    st.markdown(
         """
 <div class="hero">
   <h1>⚽ Analisador Esportivo Pro 12.2</h1>
   <p>Dashboard profissional de probabilidades, odds justas, risco e oportunidades.</p>
 </div>
-"""
+""",
+        unsafe_allow_html=True,
     )
 
     with st.sidebar:
@@ -1232,7 +1234,7 @@ def main():
     )
 
     with aba1:
-        st.html('<div class="section-title">📊 Jogos analisados</div>')
+        st.markdown('<div class="section-title">📊 Jogos analisados</div>', unsafe_allow_html=True)
 
         for item in previsoes:
             render_card_jogo(
@@ -1241,7 +1243,7 @@ def main():
             )
 
     with aba2:
-        st.html('<div class="section-title">🎯 Melhores oportunidades</div>')
+        st.markdown('<div class="section-title">🎯 Melhores oportunidades</div>', unsafe_allow_html=True)
 
         oportunidades = [
             item for item in previsoes
@@ -1263,7 +1265,7 @@ def main():
                 )
 
     with aba3:
-        st.html('<div class="section-title">⚙️ Diagnóstico do modelo</div>')
+        st.markdown('<div class="section-title">⚙️ Diagnóstico do modelo</div>', unsafe_allow_html=True)
 
         c1, c2, c3, c4 = st.columns(4)
 
