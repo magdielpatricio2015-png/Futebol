@@ -506,4 +506,4 @@ def extrair_jogos(payload, liga_id):
                 "away": nome_limpo(away.get("team", {}).get("displayName", "Fora")),
                 "placar_home": placar(home),
                 "placar_away": placar(away),
-                "placar": f"{placar(home)} -
+                "placar": f"{placar(home
