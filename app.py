@@ -86,6 +86,35 @@ FORCA_BASE = {
     "sport": 68,
     "vitoria": 69,
     "coritiba": 68,
+    "athletico-pr": 72,
+    "atletico goianiense": 68,
+    "goias": 68,
+    "cuiaba": 67,
+    "juventude": 67,
+    "chapecoense": 65,
+    "crb": 65,
+    "csa": 64,
+    "paysandu": 64,
+    "remo": 64,
+    "ponte preta": 65,
+    "guarani": 64,
+    "novorizontino": 67,
+    "mirassol": 68,
+    "operario pr": 64,
+    "vila nova": 66,
+    "amazonas": 64,
+    "america mineiro": 68,
+    "barra fc": 58,
+    "jacuipense": 57,
+    "confiança": 59,
+    "confianca": 59,
+    "sao bernardo": 63,
+    "tombense": 62,
+    "volta redonda": 62,
+    "santa cruz": 61,
+    "retro": 61,
+    "retrô": 61,
+    "bragantino": 72,
     "manchester city": 91,
     "arsenal": 88,
     "liverpool": 88,
@@ -119,6 +148,15 @@ ALIASES = {
     "vasco da gama": "vasco",
     "sao paulo fc": "sao paulo",
     "gremio fbpa": "gremio",
+    "athletico paranaense": "athletico-pr",
+    "athletico-pr": "athletico-pr",
+    "atletico pr": "athletico-pr",
+    "red bull bragantino": "bragantino",
+    "bragantino": "bragantino",
+    "operario": "operario pr",
+    "operario-pr": "operario pr",
+    "sao bernardo fc": "sao bernardo",
+    "retró": "retro",
 }
 
 CLASSICOS = {
@@ -298,6 +336,30 @@ def init_db():
     )
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS confronto_historico (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id TEXT UNIQUE,
+            liga_id TEXT,
+            liga_nome TEXT,
+            data_jogo TEXT,
+            time_a TEXT,
+            time_b TEXT,
+            chave_confronto TEXT,
+            home TEXT,
+            away TEXT,
+            home_score INTEGER,
+            away_score INTEGER,
+            real_placar TEXT,
+            total_gols INTEGER,
+            ambos_marcam INTEGER,
+            vencedor TEXT,
+            contexto TEXT,
+            criado_em TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS ajustes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chave TEXT UNIQUE,
@@ -433,6 +495,14 @@ def odd_justa(prob):
 
 def forca_time(nome):
     return FORCA_BASE.get(normalizar(nome), 70)
+
+def ajuste_forca_desconhecido(nome, casa=False):
+    nome_norm = normalizar(nome)
+    if nome_norm in FORCA_BASE:
+        return 0
+    soma = sum(ord(c) for c in nome_norm)
+    base = (soma % 9) - 4
+    return base + (1 if casa else 0)
 
 
 def forca_jogador(nome):
@@ -620,15 +690,34 @@ def buscar_jogos_ultimas_24h():
 
 
 def calcular_probabilidades(home, away):
-    fh = forca_time(home)
-    fa = forca_time(away)
+    fh = forca_time(home) + ajuste_forca_desconhecido(home, casa=True)
+    fa = forca_time(away) + ajuste_forca_desconhecido(away, casa=False)
     diff = fh - fa
-    media_home = clamp(1.4 + (diff * 0.02) + DEFAULT_HOME_ADV, 0.2, 4.0)
-    media_away = clamp(1.1 - (diff * 0.015), 0.2, 4.0)
+    media_home = 1.32 + (diff * 0.024) + DEFAULT_HOME_ADV
+    media_away = 1.05 - (diff * 0.019)
+    fonte_placar = medias_historicas(home, away)
+
+    if fonte_placar["media_home"] is not None and fonte_placar["media_away"] is not None:
+        peso_historico = 0.70 if fonte_placar["origem"] == "histórico direto" else 0.50
+        media_home = (media_home * (1 - peso_historico)) + (fonte_placar["media_home"] * peso_historico)
+        media_away = (media_away * (1 - peso_historico)) + (fonte_placar["media_away"] * peso_historico)
 
     if eh_classico(home, away):
         media_home *= 0.95
         media_away *= 0.98
+    elif abs(diff) >= 12:
+        if diff > 0:
+            media_home += 0.22
+            media_away -= 0.08
+        else:
+            media_home -= 0.08
+            media_away += 0.22
+    elif abs(diff) <= 3:
+        media_home -= 0.05
+        media_away += 0.05
+
+    media_home = clamp(media_home, 0.2, 4.0)
+    media_away = clamp(media_away, 0.2, 4.0)
 
     p_home = p_draw = p_away = 0
     p_over15 = p_over25 = p_over35 = p_under25 = p_btts = 0
@@ -656,7 +745,23 @@ def calcular_probabilidades(home, away):
             if gh > 0 and ga > 0:
                 p_btts += p
 
-    placares = sorted(placares, key=lambda x: x[2], reverse=True)
+    def score_placar(item):
+        gh, ga, prob = item
+        total = gh + ga
+        bonus = 0.0
+        if diff >= 8 and gh > ga:
+            bonus += 0.012
+        elif diff <= -8 and ga > gh:
+            bonus += 0.012
+        elif abs(diff) <= 3 and gh == ga:
+            bonus += 0.004
+        if total in (2, 3):
+            bonus += 0.003
+        if total == 0:
+            bonus -= 0.01
+        return prob + bonus
+
+    placares = sorted(placares, key=score_placar, reverse=True)
     return {
         "home": clamp(p_home, 0, 1),
         "draw": clamp(p_draw, 0, 1),
@@ -672,6 +777,10 @@ def calcular_probabilidades(home, away):
         "forca_home": fh,
         "forca_away": fa,
         "placares": placares[:5],
+        "media_home": media_home,
+        "media_away": media_away,
+        "fonte_placar": fonte_placar["origem"],
+        "amostra_placar": fonte_placar["amostra"],
     }
 
 
@@ -768,6 +877,149 @@ def resultado_placar(gh, ga):
     if ga > gh:
         return "away"
     return "draw"
+
+def chave_confronto(home, away):
+    return "|".join(sorted([normalizar(home), normalizar(away)]))
+
+def salvar_confronto_finalizado(jogo, liga_nome, contexto):
+    if not jogo.get("finalizado"):
+        return
+
+    home_score = int(jogo["home_score"])
+    away_score = int(jogo["away_score"])
+    if home_score > away_score:
+        vencedor = normalizar(jogo["home"])
+    elif away_score > home_score:
+        vencedor = normalizar(jogo["away"])
+    else:
+        vencedor = "empate"
+
+    conn = conectar_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO confronto_historico (
+            game_id, liga_id, liga_nome, data_jogo, time_a, time_b,
+            chave_confronto, home, away, home_score, away_score,
+            real_placar, total_gols, ambos_marcam, vencedor, contexto, criado_em
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            jogo["id"],
+            jogo["liga"],
+            liga_nome,
+            jogo["data"].isoformat() if jogo["data"] else "",
+            normalizar(jogo["home"]),
+            normalizar(jogo["away"]),
+            chave_confronto(jogo["home"], jogo["away"]),
+            jogo["home"],
+            jogo["away"],
+            home_score,
+            away_score,
+            placar_texto(home_score, away_score),
+            home_score + away_score,
+            int(home_score > 0 and away_score > 0),
+            vencedor,
+            contexto,
+            datetime.now().isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+def carregar_confrontos(home, away):
+    conn = conectar_db()
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT * FROM confronto_historico
+            WHERE chave_confronto = ?
+            ORDER BY data_jogo DESC, id DESC
+            """,
+            conn,
+            params=(chave_confronto(home, away),),
+        )
+    except Exception:
+        df = pd.DataFrame()
+    finally:
+        conn.close()
+    return df
+
+def carregar_forma_recente(time_nome, limite=10):
+    time_norm = normalizar(time_nome)
+    conn = conectar_db()
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT * FROM confronto_historico
+            WHERE time_a = ? OR time_b = ?
+            ORDER BY data_jogo DESC, id DESC
+            LIMIT ?
+            """,
+            conn,
+            params=(time_norm, time_norm, int(limite)),
+        )
+    except Exception:
+        df = pd.DataFrame()
+    finally:
+        conn.close()
+    return df
+
+def medias_historicas(home, away):
+    direto = carregar_confrontos(home, away)
+    if len(direto) >= 3:
+        gols_home = []
+        gols_away = []
+        for _, row in direto.iterrows():
+            if normalizar(row["home"]) == normalizar(home):
+                gols_home.append(float(row["home_score"]))
+                gols_away.append(float(row["away_score"]))
+            else:
+                gols_home.append(float(row["away_score"]))
+                gols_away.append(float(row["home_score"]))
+
+        return {
+            "origem": "histórico direto",
+            "amostra": len(direto),
+            "media_home": sum(gols_home) / len(gols_home),
+            "media_away": sum(gols_away) / len(gols_away),
+        }
+
+    forma_home = carregar_forma_recente(home)
+    forma_away = carregar_forma_recente(away)
+    if len(forma_home) >= 4 and len(forma_away) >= 4:
+        def gols_time(df, time_nome):
+            feitos = []
+            sofridos = []
+            time_norm = normalizar(time_nome)
+            for _, row in df.iterrows():
+                if normalizar(row["home"]) == time_norm:
+                    feitos.append(float(row["home_score"]))
+                    sofridos.append(float(row["away_score"]))
+                else:
+                    feitos.append(float(row["away_score"]))
+                    sofridos.append(float(row["home_score"]))
+            return (
+                sum(feitos) / len(feitos) if feitos else 1.2,
+                sum(sofridos) / len(sofridos) if sofridos else 1.1,
+            )
+
+        home_feitos, home_sofridos = gols_time(forma_home, home)
+        away_feitos, away_sofridos = gols_time(forma_away, away)
+        return {
+            "origem": "forma recente dos times",
+            "amostra": min(len(forma_home), len(forma_away)),
+            "media_home": (home_feitos + away_sofridos) / 2,
+            "media_away": (away_feitos + home_sofridos) / 2,
+        }
+
+    return {
+        "origem": "modelo geral",
+        "amostra": 0,
+        "media_home": None,
+        "media_away": None,
+    }
 
 def erro_total_gols(placar_previsto, home_score, away_score):
     numeros = [int(n) for n in re.findall(r"\d+", placar_previsto or "")]
@@ -1136,6 +1388,7 @@ def render_jogos(liga_nome, datas_escolhidas, filtro_status):
         if jogo["finalizado"]:
             atualizar_resultado(jogo)
             atualizar_resultado_placar(jogo)
+            salvar_confronto_finalizado(jogo, liga_nome, contexto)
 
         mercado_base, codigo_base, prob_base = base
         mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
@@ -1163,6 +1416,7 @@ def render_jogos(liga_nome, datas_escolhidas, filtro_status):
                 <span class="pro-chip">{contexto.replace('_', ' ')}</span>
                 <span class="pro-chip">Placar provavel {placar_previsto}</span>
                 <span class="pro-chip">Top 3: {lista_placares_texto(probs["placares"], 3)}</span>
+                <span class="pro-chip">Base placar: {probs["fonte_placar"]} ({probs["amostra_placar"]})</span>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1222,6 +1476,7 @@ def render_backtest():
         salvar_placar_previsto(jogo, jogo.get("liga_nome", jogo["liga"]), probs, contexto)
         atualizar_resultado(jogo)
         atualizar_resultado_placar(jogo)
+        salvar_confronto_finalizado(jogo, jogo.get("liga_nome", jogo["liga"]), contexto)
         mercado_base, codigo_base, prob_base = base
         mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
         acertou_base = verificar_acerto(codigo_base, jogo["home_score"], jogo["away_score"])
@@ -1361,6 +1616,7 @@ def render_aprendizado():
     df = ler_tabela("SELECT * FROM previsoes ORDER BY id DESC")
     mercados = ler_tabela("SELECT * FROM mercado_historico ORDER BY id DESC")
     placares = ler_tabela("SELECT * FROM placar_historico ORDER BY id DESC")
+    confrontos = ler_tabela("SELECT * FROM confronto_historico ORDER BY data_jogo DESC, id DESC")
     ajustes = ler_tabela("SELECT * FROM ajustes ORDER BY jogos DESC")
 
     if df.empty:
@@ -1486,6 +1742,26 @@ def render_aprendizado():
             ]
             cols = [c for c in cols if c in placares_finalizados.columns]
             st.dataframe(placares_finalizados[cols], use_container_width=True, hide_index=True)
+
+    st.subheader("Histórico direto entre times")
+    if confrontos.empty:
+        st.info("Ainda não há confrontos salvos. Carregue jogos finalizados ou rode backtest.")
+    else:
+        resumo_confrontos = (
+            confrontos
+            .groupby("chave_confronto", as_index=False)
+            .agg(
+                jogos=("id", "count"),
+                media_gols=("total_gols", "mean"),
+                ambos_marcam=("ambos_marcam", "mean"),
+                ultimo_placar=("real_placar", "first"),
+                liga=("liga_nome", "first"),
+            )
+            .sort_values("jogos", ascending=False)
+        )
+        resumo_confrontos["media_gols"] = resumo_confrontos["media_gols"].map(lambda x: f"{x:.2f}")
+        resumo_confrontos["ambos_marcam"] = resumo_confrontos["ambos_marcam"].map(pct)
+        st.dataframe(resumo_confrontos.head(50), use_container_width=True, hide_index=True)
 
     st.subheader("Historico")
     st.dataframe(df, use_container_width=True, hide_index=True)
