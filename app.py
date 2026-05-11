@@ -17,15 +17,13 @@ st.set_page_config(
 )
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
-HEADERS = {"User-Agent": "AnalisadorEsportivoPro/16.0"}
-
+HEADERS = {"User-Agent": "AnalisadorEsportivoPro/16.1"}
 DB_PATH = "data/modelo_v15.db"
 
 MAX_GOLS = 10
 RETRIES = 2
 DEFAULT_HOME_ADV = 0.25
 MIN_JOGOS_TREINO = 20
-
 
 LIGAS = {
     "Brasileirão Série A": "bra.1",
@@ -40,7 +38,6 @@ LIGAS = {
     "Libertadores": "conmebol.libertadores",
     "Sul-Americana": "conmebol.sudamericana",
 }
-
 
 FORCA_BASE = {
     "flamengo": 86,
@@ -79,7 +76,6 @@ FORCA_BASE = {
     "paris saint-germain": 88,
 }
 
-
 ALIASES = {
     "man city": "manchester city",
     "man utd": "manchester united",
@@ -97,3 +93,8 @@ ALIASES = {
     "gremio fbpa": "gremio",
 }
 
+CLASSICOS = {
+    tuple(sorted(["flamengo", "vasco"])),
+    tuple(sorted(["flamengo", "fluminense"])),
+    tuple(sorted(["flamengo", "botafogo"])),
+    tuple(sorted(["palmeiras", "corinthians"])),
