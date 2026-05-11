@@ -25,6 +25,14 @@ RETRIES = 2
 DEFAULT_HOME_ADV = 0.25
 MIN_JOGOS_TREINO = 20
 
+try:
+    cache_streamlit = st.cache_data
+except AttributeError:
+    def cache_streamlit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
 LIGAS = {
     "Brasileirão Série A": "bra.1",
     "Brasileirão Série B": "bra.2",
@@ -112,7 +120,7 @@ def aplicar_estilo():
     st.markdown(
         """
         <style>
-        .block-container { padding-top: 1rem; max-width: 1120px; }
+        .block-container { padding-top: .85rem; max-width: 1160px; }
         h1 { font-size: 1.8rem !important; }
         h2, h3 { letter-spacing: 0 !important; }
         div[data-testid="stMetric"] {
@@ -120,6 +128,29 @@ def aplicar_estilo():
             border: 1px solid #e5e7eb;
             border-radius: 8px;
             padding: .45rem .55rem;
+        }
+        div[data-testid="stAlert"] {
+            border-radius: 8px;
+            padding: .55rem .75rem;
+        }
+        section[data-testid="stSidebar"] {
+            background: #f8fafc;
+        }
+        .pro-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: .75rem .85rem;
+            background: #ffffff;
+            margin: .55rem 0 .35rem 0;
+        }
+        .pro-chip {
+            display: inline-block;
+            border: 1px solid #e5e7eb;
+            border-radius: 999px;
+            padding: .12rem .45rem;
+            margin-right: .25rem;
+            font-size: .78rem;
+            background: #f8fafc;
         }
         div[data-testid="stMetricValue"] { font-size: 1rem !important; }
         div[data-testid="stMetricDelta"] { font-size: .72rem !important; }
@@ -131,6 +162,7 @@ def aplicar_estilo():
             p, div, span { font-size: .9rem; }
             div[data-testid="stMetric"] { padding: .38rem .45rem; }
             div[data-testid="stMetricValue"] { font-size: .92rem !important; }
+            .pro-card { padding: .55rem .6rem; }
         }
         </style>
         """,
@@ -342,6 +374,7 @@ def fetch_with_retry(url, params=None):
     return {}, f"Erro ao buscar dados da ESPN: {ultimo_erro}"
 
 
+@cache_streamlit(ttl=900, show_spinner=False)
 def buscar_scoreboard(liga_id, data_iso=None):
     params = {"limit": 300}
     if data_iso:
@@ -672,6 +705,19 @@ def render_jogos(liga_nome, data_escolhida, filtro_status):
         jogos = [j for j in jogos if j["finalizado"]]
 
     st.subheader(f"{liga_nome} - {len(jogos)} jogo(s)")
+    if not jogos:
+        st.info("Nenhum jogo encontrado com estes filtros.")
+        return
+
+    jogos_futuros = sum(1 for j in jogos if j["futuro"])
+    jogos_ao_vivo = sum(1 for j in jogos if j["em_jogo"])
+    jogos_finalizados = sum(1 for j in jogos if j["finalizado"])
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Jogos", len(jogos))
+    c2.metric("Futuros", jogos_futuros)
+    c3.metric("Ao vivo", jogos_ao_vivo)
+    c4.metric("Finalizados", jogos_finalizados)
+
     resumo = []
     for jogo in jogos:
         probs = calcular_probabilidades(jogo["home"], jogo["away"])
@@ -695,13 +741,23 @@ def render_jogos(liga_nome, data_escolhida, filtro_status):
                 "Prob Base": pct(prob_base),
                 "Aprendido": mercado_ap,
                 "Prob Aprendida": pct(prob_ap),
+                "Prob Valor": prob_ap,
                 "Contexto": contexto,
                 "Ajuste": f"{fator:+.1%}",
             }
         )
 
-        st.markdown(f"### {jogo['home']} x {jogo['away']}{placar_txt}")
-        st.caption(f"{status_label(jogo)} | {contexto.replace('_', ' ')}")
+        st.markdown(
+            f"""
+            <div class="pro-card">
+                <h3>{jogo['home']} x {jogo['away']}{placar_txt}</h3>
+                <span class="pro-chip">{status_label(jogo)}</span>
+                <span class="pro-chip">{contexto.replace('_', ' ')}</span>
+                <span class="pro-chip">Placar provavel {placar_previsto}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         c1, c2 = st.columns(2)
         c1.metric("Base", mercado_base, pct(prob_base))
         c2.metric("Aprendido", mercado_ap, f"{pct(prob_ap)} | {fator:+.1%}")
@@ -730,7 +786,13 @@ def render_jogos(liga_nome, data_escolhida, filtro_status):
 
     if resumo:
         st.subheader("Resumo")
-        st.dataframe(pd.DataFrame(resumo), use_container_width=True, hide_index=True)
+        df_resumo = pd.DataFrame(resumo)
+        st.dataframe(df_resumo.drop(columns=["Prob Valor"]), use_container_width=True, hide_index=True)
+
+        st.subheader("Melhores oportunidades aprendidas")
+        destaques = df_resumo.sort_values("Prob Valor", ascending=False).head(8)
+        destaques = destaques.drop(columns=["Prob Valor"])
+        st.dataframe(destaques, use_container_width=True, hide_index=True)
 
 
 def render_backtest():
@@ -830,6 +892,30 @@ def render_aprendizado():
         desempenho["prob_media"] = desempenho["prob_media"].map(pct)
         st.dataframe(desempenho, use_container_width=True, hide_index=True)
 
+        st.subheader("Aprendizado por contexto")
+        contexto = (
+            mercados_finalizados
+            .groupby(["contexto", "codigo"], as_index=False)
+            .agg(jogos=("id", "count"), acertos=("acertou", "sum"), prob_media=("prob_base", "mean"))
+        )
+        contexto["taxa"] = contexto["acertos"] / contexto["jogos"]
+        contexto = contexto.sort_values(["jogos", "taxa"], ascending=[False, False])
+        contexto["taxa"] = contexto["taxa"].map(pct)
+        contexto["prob_media"] = contexto["prob_media"].map(pct)
+        st.dataframe(contexto.head(30), use_container_width=True, hide_index=True)
+
+        st.subheader("Calibragem por faixa de probabilidade")
+        faixas = (
+            mercados_finalizados
+            .groupby(["faixa_prob", "codigo"], as_index=False)
+            .agg(jogos=("id", "count"), acertos=("acertou", "sum"), prob_media=("prob_base", "mean"))
+        )
+        faixas["taxa_real"] = faixas["acertos"] / faixas["jogos"]
+        faixas = faixas.sort_values(["faixa_prob", "jogos"], ascending=[True, False])
+        faixas["taxa_real"] = faixas["taxa_real"].map(pct)
+        faixas["prob_media"] = faixas["prob_media"].map(pct)
+        st.dataframe(faixas, use_container_width=True, hide_index=True)
+
     st.subheader("Historico")
     st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -837,21 +923,32 @@ def render_aprendizado():
 def main():
     aplicar_estilo()
     init_db()
-    st.title("Analisador Esportivo Pro 16")
-    st.caption("Versao segura: abre primeiro e so busca jogos quando voce clicar.")
+    st.title("Analisador Esportivo Pro 16 Super")
+    st.caption("Aprendizado por erros e acertos, historico por mercado e carregamento controlado.")
 
     with st.sidebar:
+        st.header("Menu")
+        pagina = st.selectbox("Tela", ["Jogos", "Backtest 24h", "Aprendizado"])
         st.header("Filtros")
         liga_nome = st.selectbox("Liga", list(LIGAS.keys()))
         usar_data = st.checkbox("Filtrar por data")
         data_escolhida = st.date_input("Data").isoformat() if usar_data else None
         filtro_status = st.selectbox("Status", ["Todos", "Ao vivo", "Futuros", "Finalizados"])
-
-    pagina = st.radio("Tela", ["Jogos", "Backtest 24h", "Aprendizado"])
+        carregar_auto = st.checkbox("Carregar jogos ao abrir", value=False)
+        if st.button("Limpar cache ESPN"):
+            try:
+                st.cache_data.clear()
+                st.success("Cache limpo.")
+            except Exception:
+                st.info("Cache indisponivel nesta versao do Streamlit.")
 
     if pagina == "Jogos":
-        st.info("Para evitar tela branca, os jogos so carregam depois do clique.")
-        if st.button("Carregar jogos"):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Liga", liga_nome)
+        c2.metric("Status", filtro_status)
+        c3.metric("Treino minimo", MIN_JOGOS_TREINO)
+        st.info("Os jogos carregam por botao para evitar travamentos e tela branca.")
+        if carregar_auto or st.button("Carregar jogos"):
             render_jogos(liga_nome, data_escolhida, filtro_status)
     elif pagina == "Backtest 24h":
         render_backtest()
