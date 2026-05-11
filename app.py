@@ -871,6 +871,39 @@ def placar_texto(gh, ga):
 def lista_placares_texto(placares, limite):
     return ", ".join(placar_texto(gh, ga) for gh, ga, prob in placares[:limite])
 
+def placar_compatível_com_mercado(gh, ga, codigo):
+    if codigo == "home":
+        return gh > ga
+    if codigo == "away":
+        return ga > gh
+    if codigo == "draw":
+        return gh == ga
+    if codigo == "dupla_1x":
+        return gh >= ga
+    if codigo == "dupla_x2":
+        return ga >= gh
+    if codigo == "dupla_12":
+        return gh != ga
+    if codigo == "over15":
+        return gh + ga >= 2
+    if codigo == "over25":
+        return gh + ga >= 3
+    if codigo == "over35":
+        return gh + ga >= 4
+    if codigo == "under25":
+        return gh + ga <= 2
+    if codigo == "btts":
+        return gh > 0 and ga > 0
+    return True
+
+def placares_por_mercado(placares, codigo, limite=5):
+    filtrados = [
+        (gh, ga, prob)
+        for gh, ga, prob in placares
+        if placar_compatível_com_mercado(gh, ga, codigo)
+    ]
+    return (filtrados or placares)[:limite]
+
 def resultado_placar(gh, ga):
     if gh > ga:
         return "home"
@@ -1027,10 +1060,12 @@ def erro_total_gols(placar_previsto, home_score, away_score):
         return None
     return abs((numeros[0] + numeros[1]) - (home_score + away_score))
 
-def salvar_placar_previsto(jogo, liga_nome, probs, contexto):
+def salvar_placar_previsto(jogo, liga_nome, probs, contexto, codigo_mercado=None):
     placares = probs.get("placares", [])
     if not placares:
         return
+    if codigo_mercado:
+        placares = placares_por_mercado(placares, codigo_mercado, 5)
 
     top1 = placar_texto(placares[0][0], placares[0][1])
     top3 = lista_placares_texto(placares, 3)
@@ -1381,17 +1416,18 @@ def render_jogos(liga_nome, datas_escolhidas, filtro_status):
         probs = calcular_probabilidades(jogo["home"], jogo["away"])
         base = melhor_mercado_base(probs, jogo["home"], jogo["away"])
         aprendido, candidatos, contexto = melhor_mercado_aprendido(probs, jogo)
-        placar_top = probs["placares"][0]
+        mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
+        placares_coerentes = placares_por_mercado(probs["placares"], codigo_ap, 5)
+        placar_top = placares_coerentes[0]
         placar_previsto = f"{placar_top[0]} x {placar_top[1]}"
         salvar_previsao(jogo, liga_nome, base, aprendido, placar_previsto, candidatos, contexto)
-        salvar_placar_previsto(jogo, liga_nome, probs, contexto)
+        salvar_placar_previsto(jogo, liga_nome, probs, contexto, codigo_ap)
         if jogo["finalizado"]:
             atualizar_resultado(jogo)
             atualizar_resultado_placar(jogo)
             salvar_confronto_finalizado(jogo, liga_nome, contexto)
 
         mercado_base, codigo_base, prob_base = base
-        mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
         placar_txt = f" - {jogo['home_score']} x {jogo['away_score']}" if jogo["finalizado"] or jogo["em_jogo"] else ""
 
         resumo.append(
@@ -1415,7 +1451,7 @@ def render_jogos(liga_nome, datas_escolhidas, filtro_status):
                 <span class="pro-chip">{status_label(jogo)}</span>
                 <span class="pro-chip">{contexto.replace('_', ' ')}</span>
                 <span class="pro-chip">Placar provavel {placar_previsto}</span>
-                <span class="pro-chip">Top 3: {lista_placares_texto(probs["placares"], 3)}</span>
+                <span class="pro-chip">Top 3 coerente: {lista_placares_texto(placares_coerentes, 3)}</span>
                 <span class="pro-chip">Base placar: {probs["fonte_placar"]} ({probs["amostra_placar"]})</span>
             </div>
             """,
@@ -1471,14 +1507,15 @@ def render_backtest():
         probs = calcular_probabilidades(jogo["home"], jogo["away"])
         base = melhor_mercado_base(probs, jogo["home"], jogo["away"])
         aprendido, candidatos, contexto = melhor_mercado_aprendido(probs, jogo)
-        placar_previsto = f"{probs['placares'][0][0]} x {probs['placares'][0][1]}"
+        mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
+        placares_coerentes = placares_por_mercado(probs["placares"], codigo_ap, 5)
+        placar_previsto = f"{placares_coerentes[0][0]} x {placares_coerentes[0][1]}"
         salvar_previsao(jogo, jogo.get("liga_nome", jogo["liga"]), base, aprendido, placar_previsto, candidatos, contexto)
-        salvar_placar_previsto(jogo, jogo.get("liga_nome", jogo["liga"]), probs, contexto)
+        salvar_placar_previsto(jogo, jogo.get("liga_nome", jogo["liga"]), probs, contexto, codigo_ap)
         atualizar_resultado(jogo)
         atualizar_resultado_placar(jogo)
         salvar_confronto_finalizado(jogo, jogo.get("liga_nome", jogo["liga"]), contexto)
         mercado_base, codigo_base, prob_base = base
-        mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
         acertou_base = verificar_acerto(codigo_base, jogo["home_score"], jogo["away_score"])
         acertou_ap = verificar_acerto(codigo_ap, jogo["home_score"], jogo["away_score"])
         linhas.append(
