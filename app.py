@@ -37,6 +37,7 @@ except AttributeError:
 LIGAS = {
     "Brasileirão Série A": "bra.1",
     "Brasileirão Série B": "bra.2",
+    "Copa do Brasil": "bra.copa_do_brazil",
     "Premier League": "eng.1",
     "La Liga": "esp.1",
     "Serie A Itália": "ita.1",
@@ -263,6 +264,35 @@ def init_db():
             finalizado INTEGER DEFAULT 0,
             criado_em TEXT,
             UNIQUE(game_id, codigo)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS placar_historico (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id TEXT UNIQUE,
+            liga_id TEXT,
+            liga_nome TEXT,
+            data_jogo TEXT,
+            home TEXT,
+            away TEXT,
+            contexto TEXT,
+            placar_top1 TEXT,
+            placar_top3 TEXT,
+            placar_top5 TEXT,
+            prob_top1 REAL,
+            real_placar TEXT,
+            home_score INTEGER,
+            away_score INTEGER,
+            acertou_exato INTEGER,
+            acertou_top3 INTEGER,
+            acertou_top5 INTEGER,
+            acertou_vencedor INTEGER,
+            acertou_total_gols INTEGER,
+            erro_gols INTEGER,
+            finalizado INTEGER DEFAULT 0,
+            criado_em TEXT
         )
         """
     )
@@ -726,6 +756,121 @@ def verificar_acerto(codigo, home_score, away_score):
         return home_score > 0 and away_score > 0
     return False
 
+def placar_texto(gh, ga):
+    return f"{int(gh)} x {int(ga)}"
+
+def lista_placares_texto(placares, limite):
+    return ", ".join(placar_texto(gh, ga) for gh, ga, prob in placares[:limite])
+
+def resultado_placar(gh, ga):
+    if gh > ga:
+        return "home"
+    if ga > gh:
+        return "away"
+    return "draw"
+
+def erro_total_gols(placar_previsto, home_score, away_score):
+    numeros = [int(n) for n in re.findall(r"\d+", placar_previsto or "")]
+    if len(numeros) < 2:
+        return None
+    return abs((numeros[0] + numeros[1]) - (home_score + away_score))
+
+def salvar_placar_previsto(jogo, liga_nome, probs, contexto):
+    placares = probs.get("placares", [])
+    if not placares:
+        return
+
+    top1 = placar_texto(placares[0][0], placares[0][1])
+    top3 = lista_placares_texto(placares, 3)
+    top5 = lista_placares_texto(placares, 5)
+    prob_top1 = float(placares[0][2])
+
+    conn = conectar_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO placar_historico (
+            game_id, liga_id, liga_nome, data_jogo, home, away,
+            contexto, placar_top1, placar_top3, placar_top5, prob_top1,
+            finalizado, criado_em
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            jogo["id"],
+            jogo["liga"],
+            liga_nome,
+            jogo["data"].isoformat() if jogo["data"] else "",
+            jogo["home"],
+            jogo["away"],
+            contexto,
+            top1,
+            top3,
+            top5,
+            prob_top1,
+            0,
+            datetime.now().isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+def atualizar_resultado_placar(jogo):
+    real = placar_texto(jogo["home_score"], jogo["away_score"])
+    conn = conectar_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT placar_top1, placar_top3, placar_top5 FROM placar_historico WHERE game_id = ?",
+        (jogo["id"],),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return
+
+    top1, top3, top5 = row
+    top1_nums = [int(n) for n in re.findall(r"\d+", top1 or "")]
+    if len(top1_nums) >= 2:
+        vencedor_previsto = resultado_placar(top1_nums[0], top1_nums[1])
+        erro_gols = abs(top1_nums[0] - jogo["home_score"]) + abs(top1_nums[1] - jogo["away_score"])
+        acertou_total = int(erro_total_gols(top1, jogo["home_score"], jogo["away_score"]) == 0)
+    else:
+        vencedor_previsto = ""
+        erro_gols = None
+        acertou_total = 0
+
+    vencedor_real = resultado_placar(jogo["home_score"], jogo["away_score"])
+    cur.execute(
+        """
+        UPDATE placar_historico
+        SET real_placar = ?,
+            home_score = ?,
+            away_score = ?,
+            acertou_exato = ?,
+            acertou_top3 = ?,
+            acertou_top5 = ?,
+            acertou_vencedor = ?,
+            acertou_total_gols = ?,
+            erro_gols = ?,
+            finalizado = 1
+        WHERE game_id = ?
+        """,
+        (
+            real,
+            jogo["home_score"],
+            jogo["away_score"],
+            int(real == top1),
+            int(real in (top3 or "")),
+            int(real in (top5 or "")),
+            int(vencedor_previsto == vencedor_real),
+            acertou_total,
+            erro_gols,
+            jogo["id"],
+        ),
+    )
+    conn.commit()
+    conn.close()
+
 
 def calcular_probabilidades_tenis(jogador1, jogador2, circuito):
     f1 = forca_jogador(jogador1)
@@ -987,8 +1132,10 @@ def render_jogos(liga_nome, datas_escolhidas, filtro_status):
         placar_top = probs["placares"][0]
         placar_previsto = f"{placar_top[0]} x {placar_top[1]}"
         salvar_previsao(jogo, liga_nome, base, aprendido, placar_previsto, candidatos, contexto)
+        salvar_placar_previsto(jogo, liga_nome, probs, contexto)
         if jogo["finalizado"]:
             atualizar_resultado(jogo)
+            atualizar_resultado_placar(jogo)
 
         mercado_base, codigo_base, prob_base = base
         mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
@@ -1015,6 +1162,7 @@ def render_jogos(liga_nome, datas_escolhidas, filtro_status):
                 <span class="pro-chip">{status_label(jogo)}</span>
                 <span class="pro-chip">{contexto.replace('_', ' ')}</span>
                 <span class="pro-chip">Placar provavel {placar_previsto}</span>
+                <span class="pro-chip">Top 3: {lista_placares_texto(probs["placares"], 3)}</span>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1071,7 +1219,9 @@ def render_backtest():
         aprendido, candidatos, contexto = melhor_mercado_aprendido(probs, jogo)
         placar_previsto = f"{probs['placares'][0][0]} x {probs['placares'][0][1]}"
         salvar_previsao(jogo, jogo.get("liga_nome", jogo["liga"]), base, aprendido, placar_previsto, candidatos, contexto)
+        salvar_placar_previsto(jogo, jogo.get("liga_nome", jogo["liga"]), probs, contexto)
         atualizar_resultado(jogo)
+        atualizar_resultado_placar(jogo)
         mercado_base, codigo_base, prob_base = base
         mercado_ap, codigo_ap, prob_ap, fator, prob_original = aprendido
         acertou_base = verificar_acerto(codigo_base, jogo["home_score"], jogo["away_score"])
@@ -1210,6 +1360,7 @@ def render_tenis(circuito_nome, datas_escolhidas, filtro_status):
 def render_aprendizado():
     df = ler_tabela("SELECT * FROM previsoes ORDER BY id DESC")
     mercados = ler_tabela("SELECT * FROM mercado_historico ORDER BY id DESC")
+    placares = ler_tabela("SELECT * FROM placar_historico ORDER BY id DESC")
     ajustes = ler_tabela("SELECT * FROM ajustes ORDER BY jogos DESC")
 
     if df.empty:
@@ -1278,6 +1429,63 @@ def render_aprendizado():
         faixas["taxa_real"] = faixas["taxa_real"].map(pct)
         faixas["prob_media"] = faixas["prob_media"].map(pct)
         st.dataframe(faixas, use_container_width=True, hide_index=True)
+
+    st.subheader("Aprendizado de placares")
+    if placares.empty:
+        st.info("Ainda não há histórico de placares salvo.")
+    else:
+        placares_finalizados = placares[placares["finalizado"] == 1].copy()
+        if placares_finalizados.empty:
+            st.info("Ainda não há placares finalizados para medir.")
+        else:
+            total_placares = len(placares_finalizados)
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Jogos", total_placares)
+            c2.metric("Exato", pct(placares_finalizados["acertou_exato"].fillna(0).sum() / total_placares))
+            c3.metric("Top 3", pct(placares_finalizados["acertou_top3"].fillna(0).sum() / total_placares))
+            c4.metric("Top 5", pct(placares_finalizados["acertou_top5"].fillna(0).sum() / total_placares))
+            c5.metric("Vencedor", pct(placares_finalizados["acertou_vencedor"].fillna(0).sum() / total_placares))
+
+            erro_medio = placares_finalizados["erro_gols"].dropna().mean()
+            total_gols_acc = placares_finalizados["acertou_total_gols"].fillna(0).sum() / total_placares
+            c1, c2 = st.columns(2)
+            c1.metric("Erro médio de gols", f"{erro_medio:.2f}" if pd.notna(erro_medio) else "0")
+            c2.metric("Total de gols exato", pct(total_gols_acc))
+
+            st.write("Desempenho por contexto")
+            contexto_placar = (
+                placares_finalizados
+                .groupby("contexto", as_index=False)
+                .agg(
+                    jogos=("id", "count"),
+                    exato=("acertou_exato", "mean"),
+                    top3=("acertou_top3", "mean"),
+                    top5=("acertou_top5", "mean"),
+                    vencedor=("acertou_vencedor", "mean"),
+                    erro_medio=("erro_gols", "mean"),
+                )
+                .sort_values("jogos", ascending=False)
+            )
+            for col in ["exato", "top3", "top5", "vencedor"]:
+                contexto_placar[col] = contexto_placar[col].map(pct)
+            st.dataframe(contexto_placar, use_container_width=True, hide_index=True)
+
+            st.write("Placares previstos x reais")
+            placar_rank = (
+                placares_finalizados
+                .groupby(["placar_top1", "real_placar"], as_index=False)
+                .agg(jogos=("id", "count"), erro_medio=("erro_gols", "mean"))
+                .sort_values(["jogos", "erro_medio"], ascending=[False, True])
+            )
+            st.dataframe(placar_rank.head(40), use_container_width=True, hide_index=True)
+
+            cols = [
+                "liga_nome", "home", "away", "contexto", "placar_top1", "placar_top3",
+                "real_placar", "acertou_exato", "acertou_top3", "acertou_top5",
+                "acertou_vencedor", "erro_gols",
+            ]
+            cols = [c for c in cols if c in placares_finalizados.columns]
+            st.dataframe(placares_finalizados[cols], use_container_width=True, hide_index=True)
 
     st.subheader("Historico")
     st.dataframe(df, use_container_width=True, hide_index=True)
