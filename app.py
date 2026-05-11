@@ -47,6 +47,24 @@ LIGAS = {
     "Sul-Americana": "conmebol.sudamericana",
 }
 
+TENIS_LIGAS = {
+    "ATP": "atp",
+    "WTA": "wta",
+}
+
+FORCA_TENIS = {
+    "jannik sinner": 94,
+    "carlos alcaraz": 93,
+    "novak djokovic": 92,
+    "daniil medvedev": 88,
+    "alexander zverev": 88,
+    "iga swiatek": 94,
+    "aryna sabalenka": 93,
+    "coco gauff": 90,
+    "elena rybakina": 89,
+    "jessica pegula": 86,
+}
+
 FORCA_BASE = {
     "flamengo": 86,
     "palmeiras": 84,
@@ -262,6 +280,29 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tenis_historico (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id TEXT UNIQUE,
+            circuito TEXT,
+            torneio TEXT,
+            data_jogo TEXT,
+            jogador1 TEXT,
+            jogador2 TEXT,
+            mercado TEXT,
+            codigo TEXT,
+            prob_base REAL,
+            prob_aprendida REAL,
+            ajuste_aplicado REAL,
+            placar TEXT,
+            vencedor TEXT,
+            acertou INTEGER,
+            finalizado INTEGER DEFAULT 0,
+            criado_em TEXT
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -341,6 +382,10 @@ def forca_time(nome):
     return FORCA_BASE.get(normalizar(nome), 70)
 
 
+def forca_jogador(nome):
+    return FORCA_TENIS.get(normalizar(nome), 70)
+
+
 def eh_classico(home, away):
     return tuple(sorted([normalizar(home), normalizar(away)])) in CLASSICOS
 
@@ -402,6 +447,15 @@ def buscar_scoreboard(liga_id, data_iso=None):
     return fetch_with_retry(f"{ESPN_BASE}/{liga_id}/scoreboard", params)
 
 
+@cache_streamlit(ttl=900, show_spinner=False)
+def buscar_scoreboard_tenis(circuito, data_iso=None):
+    params = {"limit": 300}
+    if data_iso:
+        params["dates"] = data_iso.replace("-", "")
+    url = f"https://site.api.espn.com/apis/site/v2/sports/tennis/{circuito}/scoreboard"
+    return fetch_with_retry(url, params)
+
+
 def extrair_jogos(payload, liga_id):
     jogos = []
     for event in payload.get("events", []) or []:
@@ -438,6 +492,61 @@ def extrair_jogos(payload, liga_id):
                 "futuro": status_type.get("state") == "pre",
             }
         )
+    return jogos
+
+
+def extrair_jogos_tenis(payload, circuito):
+    jogos = []
+    for evento in payload.get("events", []) or []:
+        torneio = evento.get("name", "Torneio")
+        for grupo in evento.get("groupings", []) or []:
+            for comp in grupo.get("competitions", []) or []:
+                competidores = comp.get("competitors") or []
+                if len(competidores) < 2:
+                    continue
+
+                p1 = competidores[0]
+                p2 = competidores[1]
+                status_type = (comp.get("status") or {}).get("type", {})
+
+                def nome(c):
+                    atleta = c.get("athlete") or {}
+                    return nome_limpo(atleta.get("displayName") or atleta.get("shortName") or "Jogador")
+
+                def sets_txt(c):
+                    valores = []
+                    for linha in c.get("linescores") or []:
+                        valor = linha.get("value")
+                        if valor is not None:
+                            valores.append(str(int(float(valor))))
+                    return " ".join(valores)
+
+                score1 = sets_txt(p1)
+                score2 = sets_txt(p2)
+                placar = f"{score1} / {score2}" if score1 or score2 else ""
+                vencedor = ""
+                if p1.get("winner"):
+                    vencedor = nome(p1)
+                elif p2.get("winner"):
+                    vencedor = nome(p2)
+
+                jogos.append(
+                    {
+                        "id": str(comp.get("id", "")),
+                        "circuito": circuito,
+                        "torneio": torneio,
+                        "fase": ((comp.get("round") or {}).get("displayName") or ""),
+                        "jogador1": nome(p1),
+                        "jogador2": nome(p2),
+                        "placar": placar,
+                        "vencedor": vencedor,
+                        "data": parse_dt(comp.get("date") or comp.get("startDate")),
+                        "status": status_type.get("description", ""),
+                        "em_jogo": status_type.get("state") == "in",
+                        "finalizado": status_type.get("state") == "post",
+                        "futuro": status_type.get("state") == "pre",
+                    }
+                )
     return jogos
 
 
@@ -593,6 +702,100 @@ def verificar_acerto(codigo, home_score, away_score):
     if codigo == "btts":
         return home_score > 0 and away_score > 0
     return False
+
+
+def calcular_probabilidades_tenis(jogador1, jogador2, circuito):
+    f1 = forca_jogador(jogador1)
+    f2 = forca_jogador(jogador2)
+    diff = f1 - f2
+    p1 = clamp(1 / (1 + math.exp(-(diff / 12))), 0.08, 0.92)
+
+    if circuito == "wta":
+        p_over = 0.46 + (0.10 if abs(diff) <= 4 else -0.04)
+    else:
+        p_over = 0.48 + (0.08 if abs(diff) <= 4 else -0.03)
+
+    p_over = clamp(p_over, 0.25, 0.72)
+    p2 = 1 - p1
+    return {
+        "j1": p1,
+        "j2": p2,
+        "over_games": p_over,
+        "straight_sets": clamp(max(p1, p2) - 0.10, 0.35, 0.78),
+        "forca_j1": f1,
+        "forca_j2": f2,
+    }
+
+
+def mercado_tenis(probs, jogador1, jogador2, circuito):
+    mercados = [
+        (f"{jogador1} vence", "j1", probs["j1"]),
+        (f"{jogador2} vence", "j2", probs["j2"]),
+        ("Over games", "over_games", probs["over_games"]),
+        ("Vitoria em sets diretos", "straight_sets", probs["straight_sets"]),
+    ]
+
+    candidatos = []
+    for nome, codigo, prob in mercados:
+        fator = obter_fator_aprendizado(f"tenis_{circuito}", f"tenis_{codigo}", "tenis", faixa_probabilidade(prob))
+        candidatos.append((nome, codigo, clamp(prob + fator, 0.01, 0.99), fator, prob))
+
+    return sorted(candidatos, key=lambda x: x[2], reverse=True)[0], candidatos
+
+
+def verificar_acerto_tenis(codigo, jogo):
+    vencedor = jogo.get("vencedor", "")
+    jogador1 = jogo.get("jogador1", "")
+    jogador2 = jogo.get("jogador2", "")
+    if not vencedor:
+        return False
+    if codigo == "j1":
+        return vencedor == jogador1
+    if codigo == "j2":
+        return vencedor == jogador2
+    return False
+
+
+def salvar_previsao_tenis(jogo, mercado):
+    nome, codigo, prob_aprendida, fator, prob_base = mercado
+    acertou = None
+    finalizado = int(jogo["finalizado"])
+    vencedor = jogo.get("vencedor", "")
+    if finalizado:
+        acertou = int(verificar_acerto_tenis(codigo, jogo))
+
+    conn = conectar_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO tenis_historico (
+            game_id, circuito, torneio, data_jogo, jogador1, jogador2,
+            mercado, codigo, prob_base, prob_aprendida, ajuste_aplicado,
+            placar, vencedor, acertou, finalizado, criado_em
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            jogo["id"],
+            jogo["circuito"],
+            jogo["torneio"],
+            jogo["data"].isoformat() if jogo["data"] else "",
+            jogo["jogador1"],
+            jogo["jogador2"],
+            nome,
+            codigo,
+            float(prob_base),
+            float(prob_aprendida),
+            float(fator),
+            jogo.get("placar", ""),
+            vencedor,
+            acertou,
+            finalizado,
+            datetime.now().isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
 
 
 def salvar_previsao(jogo, liga_nome, base, aprendido, placar_previsto, candidatos, contexto):
@@ -864,6 +1067,93 @@ def render_backtest():
     st.dataframe(df_bt, use_container_width=True, hide_index=True)
 
 
+def render_tenis(circuito_nome, data_escolhida, filtro_status):
+    circuito = TENIS_LIGAS[circuito_nome]
+    with st.spinner("Carregando jogos de tenis..."):
+        payload, erro = buscar_scoreboard_tenis(circuito, data_escolhida)
+    if erro:
+        st.error(erro)
+        return
+
+    jogos = extrair_jogos_tenis(payload, circuito)
+    if filtro_status == "Ao vivo":
+        jogos = [j for j in jogos if j["em_jogo"]]
+    elif filtro_status == "Futuros":
+        jogos = [j for j in jogos if j["futuro"]]
+    elif filtro_status == "Finalizados":
+        jogos = [j for j in jogos if j["finalizado"]]
+
+    st.subheader(f"Tenis {circuito_nome} - {len(jogos)} jogo(s)")
+    if not jogos:
+        st.info("Nenhum jogo de tenis encontrado com estes filtros.")
+        return
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Circuito", circuito_nome)
+    c2.metric("Jogos", len(jogos))
+    c3.metric("Treino minimo", MIN_JOGOS_TREINO)
+
+    linhas = []
+    for jogo in jogos:
+        probs = calcular_probabilidades_tenis(jogo["jogador1"], jogo["jogador2"], circuito)
+        melhor, candidatos = mercado_tenis(probs, jogo["jogador1"], jogo["jogador2"], circuito)
+        salvar_previsao_tenis(jogo, melhor)
+
+        mercado, codigo, prob_aprendida, fator, prob_base = melhor
+        placar_txt = f" - {jogo['placar']}" if jogo.get("placar") else ""
+        st.markdown(
+            f"""
+            <div class="pro-card">
+                <h3>{jogo['jogador1']} x {jogo['jogador2']}{placar_txt}</h3>
+                <span class="pro-chip">{status_label(jogo)}</span>
+                <span class="pro-chip">{jogo.get('torneio', '')}</span>
+                <span class="pro-chip">{jogo.get('fase', '')}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Previsao", mercado, pct(prob_aprendida))
+        c2.metric(jogo["jogador1"], pct(probs["j1"]), f"Forca {probs['forca_j1']}")
+        c3.metric(jogo["jogador2"], pct(probs["j2"]), f"Forca {probs['forca_j2']}")
+
+        with st.expander("Ver mercados do tenis"):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Mercado": nome,
+                            "Base": pct(prob_original),
+                            "Aprendido": pct(prob_ajustada),
+                            "Ajuste": f"{fator_candidato:+.1%}",
+                            "Odd justa": f"{odd_justa(prob_ajustada):.2f}",
+                        }
+                        for nome, codigo_item, prob_ajustada, fator_candidato, prob_original in candidatos
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        linhas.append(
+            {
+                "Jogo": f"{jogo['jogador1']} x {jogo['jogador2']}",
+                "Torneio": jogo["torneio"],
+                "Status": status_label(jogo),
+                "Previsao": mercado,
+                "Prob": pct(prob_aprendida),
+                "Ajuste": f"{fator:+.1%}",
+                "Placar": jogo.get("placar", ""),
+                "Vencedor": jogo.get("vencedor", ""),
+            }
+        )
+        st.markdown("---")
+
+    st.subheader("Resumo tenis")
+    st.dataframe(pd.DataFrame(linhas), use_container_width=True, hide_index=True)
+
+
 def render_aprendizado():
     df = ler_tabela("SELECT * FROM previsoes ORDER BY id DESC")
     mercados = ler_tabela("SELECT * FROM mercado_historico ORDER BY id DESC")
@@ -948,9 +1238,14 @@ def main():
 
     with st.sidebar:
         st.header("Menu")
-        pagina = st.selectbox("Tela", ["Jogos", "Backtest 24h", "Aprendizado"])
+        esporte = st.selectbox("Esporte", ["Futebol", "Tenis"])
+        if esporte == "Futebol":
+            pagina = st.selectbox("Tela", ["Jogos", "Backtest 24h", "Aprendizado"])
+        else:
+            pagina = "Tenis"
         st.header("Filtros")
         liga_nome = st.selectbox("Liga", list(LIGAS.keys()))
+        circuito_tenis = st.selectbox("Circuito tenis", list(TENIS_LIGAS.keys()))
         usar_data = st.checkbox("Filtrar por data")
         data_escolhida = st.date_input("Data").isoformat() if usar_data else None
         filtro_status = st.selectbox("Status", ["Todos", "Ao vivo", "Futuros", "Finalizados"])
@@ -965,15 +1260,20 @@ def main():
     st.markdown(
         f"""
         <div class="mobile-filter">
+            <b>Esporte:</b> {esporte}<br>
             <b>Tela:</b> {pagina}<br>
-            <b>Liga:</b> {liga_nome}<br>
+            <b>Liga/Circuito:</b> {liga_nome if esporte == 'Futebol' else circuito_tenis}<br>
             <b>Status:</b> {filtro_status}
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    if pagina == "Jogos":
+    if esporte == "Tenis":
+        st.info(f"Tenis {circuito_tenis} | {filtro_status} | previsao por forca do jogador e aprendizado.")
+        if carregar_auto or st.button("Carregar jogos de tenis"):
+            render_tenis(circuito_tenis, data_escolhida, filtro_status)
+    elif pagina == "Jogos":
         st.info(f"{liga_nome} | {filtro_status} | treino minimo: {MIN_JOGOS_TREINO} jogos")
         if carregar_auto or st.button("Carregar jogos"):
             render_jogos(liga_nome, data_escolhida, filtro_status)
