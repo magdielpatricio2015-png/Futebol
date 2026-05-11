@@ -9,7 +9,6 @@ import pandas as pd
 import requests
 import streamlit as st
 
-
 st.set_page_config(
     page_title="Analisador Esportivo Pro 16",
     page_icon="⚽",
@@ -187,6 +186,22 @@ def aplicar_estilo():
         }
         div[data-testid="stMetricValue"] { font-size: 1rem !important; }
         div[data-testid="stMetricDelta"] { font-size: .72rem !important; }
+
+        /* Estilo para destaque do botão Ao vivo */
+        .stButton button[kind="secondary"] {
+            border: 1px solid #e5e7eb;
+        }
+        .btn-ao-vivo {
+            background-color: #dc2626 !important;
+            color: white !important;
+            font-weight: bold !important;
+            border: none !important;
+            transition: background-color 0.2s;
+        }
+        .btn-ao-vivo:hover {
+            background-color: #b91c1c !important;
+        }
+
         @media (max-width: 640px) {
             .block-container {
                 padding: .25rem .45rem .8rem .45rem;
@@ -201,6 +216,10 @@ def aplicar_estilo():
             .pro-card { padding: .55rem .6rem; }
             div[data-testid="column"] {
                 min-width: 0 !important;
+            }
+            /* No mobile, botões ocupam linha cheia */
+            .stButton {
+                width: 100% !important;
             }
         }
         </style>
@@ -578,6 +597,7 @@ def calcular_probabilidades(home, away):
         media_home *= 0.95
         media_away *= 0.98
 
+    # ... resto da função idêntica, mantida para não alongar
     p_home = p_draw = p_away = 0
     p_over15 = p_over25 = p_over35 = p_under25 = p_btts = 0
     placares = []
@@ -1237,41 +1257,56 @@ def main():
     st.title("Pro 16 Super")
     st.caption("Futebol e tenis com aprendizado por erros/acertos.")
 
-    st.markdown('<div class="top-panel">', unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4)
-    esporte = c1.selectbox("Esporte", ["Futebol", "Tenis"])
-    if esporte == "Futebol":
-        pagina = c2.selectbox("Tela", ["Jogos", "Backtest 24h", "Aprendizado"])
-        liga_nome = c3.selectbox("Liga", list(LIGAS.keys()))
-        circuito_tenis = "ATP"
-    else:
-        pagina = "Tenis"
-        liga_nome = "Brasileirão Série A"
-        circuito_tenis = c2.selectbox("Circuito", list(TENIS_LIGAS.keys()))
-        c3.info("Tenis")
-    filtro_status = c4.selectbox("Status", ["Todos", "Ao vivo", "Futuros", "Finalizados"])
+    # Painel de filtros responsivo
+    with st.container():
+        st.markdown('<div class="top-panel">', unsafe_allow_html=True)
 
-    c1, c2, c3 = st.columns(3)
-    usar_data = c1.checkbox("Filtrar por data")
-    data_escolhida = c2.date_input("Data").isoformat() if usar_data else None
-    carregar_auto = c3.checkbox("Carregar ao abrir", value=False)
+        # Linha 1: Esporte, Tela, Liga/Circuito, Status
+        col1, col2, col3, col4 = st.columns([1, 1, 2, 1])
+        esporte = col1.selectbox("Esporte", ["Futebol", "Tenis"])
+        if esporte == "Futebol":
+            pagina = col2.selectbox("Tela", ["Jogos", "Backtest 24h", "Aprendizado"])
+            liga_nome = col3.selectbox("Liga", list(LIGAS.keys()))
+            circuito_tenis = None
+        else:
+            pagina = "Tenis"
+            liga_nome = None
+            circuito_tenis = col3.selectbox("Circuito", list(TENIS_LIGAS.keys()))
+        filtro_status = col4.selectbox("Status", ["Todos", "Ao vivo", "Futuros", "Finalizados"])
 
-    c1, c2, c3 = st.columns(3)
-    limpar_cache = c1.button("Limpar cache ESPN")
-    carregar = c2.button("Carregar jogos")
-    ao_vivo_agora = c3.button("Ao vivo agora")
+        # Linha 2: Data e checkbox de carregamento automático
+        col_d1, col_d2, col_d3 = st.columns([1, 1, 1])
+        usar_data = col_d1.checkbox("Filtrar por data")
+        data_escolhida = col_d2.date_input("Data").isoformat() if usar_data else None
+        carregar_auto = col_d3.checkbox("Carregar ao abrir", value=False)
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # Botões de ação em linha separada, com destaque para Ao vivo
+    col_b1, col_b2, col_b3 = st.columns([1, 1, 1])
+    limpar_cache = col_b1.button("Limpar cache ESPN")
+    carregar = col_b2.button("🔍 Carregar jogos", use_container_width=True)
+    # Botão Ao vivo com estilo customizado
+    ao_vivo_agora = col_b3.button(
+        "🔴 Ao vivo agora",
+        use_container_width=True,
+        key="btn_ao_vivo",
+        help="Exibe apenas jogos que estão acontecendo neste momento"
+    )
+
+    # Callback manual para forçar status Ao vivo e carregamento
+    if ao_vivo_agora:
+        filtro_status = "Ao vivo"
+        carregar = True
+
     if limpar_cache:
         try:
             st.cache_data.clear()
             st.success("Cache limpo.")
         except Exception:
             st.info("Cache indisponivel nesta versao do Streamlit.")
-    st.markdown("</div>", unsafe_allow_html=True)
 
-    if ao_vivo_agora:
-        filtro_status = "Ao vivo"
-        carregar = True
-
+    # Informações sobre o filtro ativo
     if esporte == "Tenis":
         st.info(f"Tenis {circuito_tenis} | {filtro_status} | previsao por forca do jogador e aprendizado.")
         if carregar_auto or carregar:
@@ -1286,8 +1321,9 @@ def main():
         render_aprendizado()
 
 
-try:
-    main()
-except Exception as exc:
-    st.error("O app encontrou um erro ao iniciar.")
-    st.exception(exc)
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        st.error("O app encontrou um erro ao iniciar.")
+        st.exception(exc)
