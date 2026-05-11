@@ -9,7 +9,6 @@ import pandas as pd
 import requests
 import streamlit as st
 
-
 st.set_page_config(
     page_title="Analisador Esportivo Pro Learning",
     page_icon="⚽",
@@ -143,8 +142,8 @@ def aplicar_estilo():
             --border: #e5e7eb;
             --text-muted: #64748b;
         }
-        .block-container { padding-top: .7rem; max-width: 1220px; }
-        h1 { font-size: 1.9rem !important; margin-bottom: .1rem !important; }
+        .block-container { padding: 1rem 1.5rem .8rem 1.5rem; max-width: 1220px; }
+        h1 { font-size: 1.9rem !important; margin-top: 0 !important; margin-bottom: .2rem !important; }
         h2, h3 { letter-spacing: -.01em !important; }
         [data-testid="stHeader"] { height: 2.4rem; }
         [data-testid="stToolbar"] { display: none; }
@@ -163,8 +162,8 @@ def aplicar_estilo():
         .hero {
             border: 1px solid var(--border);
             border-radius: 18px;
-            padding: 1rem 1.1rem;
-            margin: .25rem 0 .8rem 0;
+            padding: 1rem 1.2rem;
+            margin: .5rem 0 1rem 0;
             background:
                 radial-gradient(circle at top left, rgba(59, 130, 246, .14), transparent 28%),
                 linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
@@ -176,9 +175,9 @@ def aplicar_estilo():
         .pro-card {
             border: 1px solid var(--border);
             border-radius: 16px;
-            padding: .85rem .95rem;
+            padding: .85rem 1rem;
             background: #ffffff;
-            margin: .7rem 0 .45rem 0;
+            margin: .85rem 0 .55rem 0;
             box-shadow: 0 6px 16px rgba(15, 23, 42, .045);
         }
         .pro-card h3 { margin-bottom: .4rem !important; }
@@ -230,10 +229,10 @@ def aplicar_estilo():
     )
 
 
+# ------------ funções auxiliares (mantidas integralmente) ------------
 def conectar_db():
     os.makedirs("data", exist_ok=True)
     return sqlite3.connect(DB_PATH)
-
 
 def init_db():
     conn = conectar_db()
@@ -328,7 +327,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 def ler_tabela(sql):
     conn = conectar_db()
     try:
@@ -337,7 +335,6 @@ def ler_tabela(sql):
         return pd.DataFrame()
     finally:
         conn.close()
-
 
 def salvar_ajuste(chave, fator, jogos, acertos):
     taxa = acertos / jogos if jogos else 0
@@ -359,10 +356,8 @@ def salvar_ajuste(chave, fator, jogos, acertos):
     conn.commit()
     conn.close()
 
-
 def nome_limpo(nome):
     return " ".join(str(nome or "").strip().split())
-
 
 def normalizar(nome):
     nome = nome_limpo(nome).lower()
@@ -373,7 +368,6 @@ def normalizar(nome):
     nome = re.sub(r"\s+", " ", nome).strip()
     return ALIASES.get(nome, nome)
 
-
 def parse_dt(valor):
     if not valor:
         return None
@@ -382,35 +376,27 @@ def parse_dt(valor):
     except Exception:
         return None
 
-
 def pct(x):
     return f"{100 * float(x):.1f}%"
 
-
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
-
 
 def poisson_pmf(k, media):
     media = max(0.03, float(media))
     return math.exp(-media) * (media ** k) / math.factorial(k)
 
-
 def odd_justa(prob):
     return 1 / max(float(prob), 0.0001)
-
 
 def forca_time(nome):
     return FORCA_BASE.get(normalizar(nome), 70)
 
-
 def forca_jogador(nome):
     return FORCA_TENIS.get(normalizar(nome), 70)
 
-
 def eh_classico(home, away):
     return tuple(sorted([normalizar(home), normalizar(away)])) in CLASSICOS
-
 
 def status_label(jogo):
     if jogo["em_jogo"]:
@@ -421,14 +407,12 @@ def status_label(jogo):
         return "Futuro"
     return jogo["status"] or "Status nao informado"
 
-
 def faixa_probabilidade(prob):
     if prob >= 0.72:
         return "alta"
     if prob >= 0.58:
         return "media"
     return "baixa"
-
 
 def contexto_jogo(home, away):
     fh = forca_time(home)
@@ -448,7 +432,6 @@ def contexto_jogo(home, away):
         return "favorito_fora"
     return "leve_desequilibrio"
 
-
 def fetch_with_retry(url, params=None):
     ultimo_erro = ""
     for _ in range(RETRIES):
@@ -460,14 +443,12 @@ def fetch_with_retry(url, params=None):
             ultimo_erro = str(exc)
     return {}, f"Erro ao buscar dados da ESPN: {ultimo_erro}"
 
-
 @cache_streamlit(ttl=900, show_spinner=False)
 def buscar_scoreboard(liga_id, data_iso=None):
     params = {"limit": 300}
     if data_iso:
         params["dates"] = data_iso.replace("-", "")
     return fetch_with_retry(f"{ESPN_BASE}/{liga_id}/scoreboard", params)
-
 
 @cache_streamlit(ttl=900, show_spinner=False)
 def buscar_scoreboard_tenis(circuito, data_iso=None):
@@ -476,7 +457,6 @@ def buscar_scoreboard_tenis(circuito, data_iso=None):
         params["dates"] = data_iso.replace("-", "")
     url = f"https://site.api.espn.com/apis/site/v2/sports/tennis/{circuito}/scoreboard"
     return fetch_with_retry(url, params)
-
 
 def extrair_jogos(payload, liga_id):
     jogos = []
@@ -515,7 +495,6 @@ def extrair_jogos(payload, liga_id):
             }
         )
     return jogos
-
 
 def extrair_jogos_tenis(payload, circuito):
     jogos = []
@@ -571,7 +550,6 @@ def extrair_jogos_tenis(payload, circuito):
                 )
     return jogos
 
-
 def buscar_jogos_ultimas_24h():
     agora = datetime.now()
     datas = {(agora - timedelta(days=1)).date().isoformat(), agora.date().isoformat()}
@@ -586,7 +564,6 @@ def buscar_jogos_ultimas_24h():
                 if jogo["data"] and agora - timedelta(hours=24) <= jogo["data"] <= agora:
                     todos.append(jogo)
     return todos
-
 
 def calcular_probabilidades(home, away):
     fh = forca_time(home)
@@ -643,7 +620,6 @@ def calcular_probabilidades(home, away):
         "placares": placares[:5],
     }
 
-
 def mercados_disponiveis(probs, home, away):
     return [
         (f"{home} vence", "home", probs["home"]),
@@ -657,7 +633,6 @@ def mercados_disponiveis(probs, home, away):
         ("Under 2.5 gols", "under25", probs["under25"]),
         ("Ambos marcam", "btts", probs["btts"]),
     ]
-
 
 def obter_fator_aprendizado(liga_id, codigo, contexto=None, faixa=None):
     conn = conectar_db()
@@ -679,7 +654,6 @@ def obter_fator_aprendizado(liga_id, codigo, contexto=None, faixa=None):
     conn.close()
     return clamp(fator_total, -0.18, 0.18)
 
-
 def candidatos_aprendidos(probs, jogo):
     contexto = contexto_jogo(jogo["home"], jogo["away"])
     candidatos = []
@@ -689,15 +663,12 @@ def candidatos_aprendidos(probs, jogo):
         candidatos.append((nome, codigo, clamp(prob + fator, 0.01, 0.99), fator, prob))
     return candidatos, contexto
 
-
 def melhor_mercado_base(probs, home, away):
     return sorted(mercados_disponiveis(probs, home, away), key=lambda x: x[2], reverse=True)[0]
-
 
 def melhor_mercado_aprendido(probs, jogo):
     candidatos, contexto = candidatos_aprendidos(probs, jogo)
     return sorted(candidatos, key=lambda x: x[2], reverse=True)[0], candidatos, contexto
-
 
 def verificar_acerto(codigo, home_score, away_score):
     total = home_score + away_score
@@ -725,7 +696,6 @@ def verificar_acerto(codigo, home_score, away_score):
         return home_score > 0 and away_score > 0
     return False
 
-
 def calcular_probabilidades_tenis(jogador1, jogador2, circuito):
     f1 = forca_jogador(jogador1)
     f2 = forca_jogador(jogador2)
@@ -748,7 +718,6 @@ def calcular_probabilidades_tenis(jogador1, jogador2, circuito):
         "forca_j2": f2,
     }
 
-
 def mercado_tenis(probs, jogador1, jogador2, circuito):
     mercados = [
         (f"{jogador1} vence", "j1", probs["j1"]),
@@ -764,18 +733,12 @@ def mercado_tenis(probs, jogador1, jogador2, circuito):
 
     return sorted(candidatos, key=lambda x: x[2], reverse=True)[0], candidatos
 
-
 def total_games_tenis(placar):
     """Soma games a partir de placares simples no formato '6 4 7 / 4 6 5'."""
     numeros = [int(n) for n in re.findall(r"\d+", placar or "")]
     return sum(numeros)
 
-
 def sets_vencidos_tenis(placar):
-    """
-    Calcula sets vencidos usando pares por posição:
-    '6 4 7 / 4 6 5' -> jogador1 venceu 2 sets, jogador2 venceu 1.
-    """
     if "/" not in (placar or ""):
         return 0, 0
 
@@ -792,7 +755,6 @@ def sets_vencidos_tenis(placar):
 
     return s1, s2
 
-
 def verificar_acerto_tenis(codigo, jogo):
     vencedor = jogo.get("vencedor", "")
     jogador1 = jogo.get("jogador1", "")
@@ -807,12 +769,9 @@ def verificar_acerto_tenis(codigo, jogo):
         s1, s2 = sets_vencidos_tenis(placar)
         return bool(vencedor) and (s1 == 0 or s2 == 0)
     if codigo == "over_games":
-        # Linha didática fixa. Depois você pode substituir por linhas reais de odds.
         return total_games_tenis(placar) >= 22
 
     return False
-
-
 
 def salvar_previsao_tenis(jogo, mercado):
     nome, codigo, prob_aprendida, fator, prob_base = mercado
@@ -870,8 +829,6 @@ def salvar_previsao_tenis(jogo, mercado):
     conn.commit()
     conn.close()
 
-
-
 def salvar_previsao(jogo, liga_nome, base, aprendido, placar_previsto, candidatos, contexto):
     conn = conectar_db()
     cur = conn.cursor()
@@ -914,7 +871,6 @@ def salvar_previsao(jogo, liga_nome, base, aprendido, placar_previsto, candidato
     conn.commit()
     conn.close()
 
-
 def atualizar_resultado(jogo):
     conn = conectar_db()
     cur = conn.cursor()
@@ -946,7 +902,6 @@ def atualizar_resultado(jogo):
     conn.commit()
     conn.close()
 
-
 def treinar_grupo(df, coluna, peso, limite, prefixo):
     treinados = 0
     if coluna not in df.columns:
@@ -962,7 +917,6 @@ def treinar_grupo(df, coluna, peso, limite, prefixo):
                 salvar_ajuste(f"{prefixo}:{valor}|mercado:{codigo}", fator, jogos, acertos)
                 treinados += 1
     return treinados
-
 
 def treinar_modelo():
     df = ler_tabela("SELECT * FROM mercado_historico WHERE finalizado = 1")
@@ -984,15 +938,12 @@ def treinar_modelo():
     treinados += treinar_grupo(df, "faixa_prob", 0.10, 0.035, "faixa")
     return treinados
 
-
-
 def treinar_modelo_tenis():
     df = ler_tabela("SELECT * FROM tenis_historico WHERE finalizado = 1")
     if df.empty:
         return 0
 
     treinados = 0
-
     for codigo in df["codigo"].dropna().unique():
         sub = df[df["codigo"] == codigo]
         jogos = len(sub)
@@ -1125,7 +1076,6 @@ def render_jogos(liga_nome, data_escolhida, filtro_status):
         destaques = destaques.drop(columns=["Prob Valor"])
         st.dataframe(destaques, use_container_width=True, hide_index=True)
 
-
 def render_backtest():
     if not st.button("Rodar backtest 24h"):
         st.info("Clique para buscar jogos finalizados das ultimas 24h.")
@@ -1173,7 +1123,6 @@ def render_backtest():
     c3.metric("Aprendido", f"{acertos_ap}/{total}", pct(acertos_ap / total))
     c4.metric("Ganho", acertos_ap - acertos_base)
     st.dataframe(df_bt, use_container_width=True, hide_index=True)
-
 
 def render_tenis(circuito_nome, data_escolhida, filtro_status):
     circuito = TENIS_LIGAS[circuito_nome]
@@ -1260,7 +1209,6 @@ def render_tenis(circuito_nome, data_escolhida, filtro_status):
 
     st.subheader("Resumo tenis")
     st.dataframe(pd.DataFrame(linhas), use_container_width=True, hide_index=True)
-
 
 def render_aprendizado():
     df = ler_tabela("SELECT * FROM previsoes ORDER BY id DESC")
@@ -1352,11 +1300,16 @@ def render_aprendizado():
         st.write("Tênis")
         st.dataframe(tenis, use_container_width=True, hide_index=True)
 
-
-
 def main():
     aplicar_estilo()
     init_db()
+
+    # Inicializa sessão para filtro de status
+    if "filtro_status" not in st.session_state:
+        st.session_state.filtro_status = "Todos"
+    if "carregar_auto" not in st.session_state:
+        st.session_state.carregar_auto = False
+
     st.title("Analisador Esportivo Learning")
     st.caption("Futebol com Poisson, tênis com força relativa e aprendizado por erros/acertos.")
     st.markdown(
@@ -1371,6 +1324,7 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # Sidebar reorganizada
     with st.sidebar:
         st.header("Menu")
         esporte = st.selectbox("Esporte", ["Futebol", "Tenis"])
@@ -1378,13 +1332,29 @@ def main():
             pagina = st.selectbox("Tela", ["Jogos", "Backtest 24h", "Aprendizado"])
         else:
             pagina = "Tenis"
-        st.header("Filtros")
-        liga_nome = st.selectbox("Liga", list(LIGAS.keys()))
-        circuito_tenis = st.selectbox("Circuito tenis", list(TENIS_LIGAS.keys()))
-        usar_data = st.checkbox("Filtrar por data")
-        data_escolhida = st.date_input("Data").isoformat() if usar_data else None
-        filtro_status = st.selectbox("Status", ["Todos", "Ao vivo", "Futuros", "Finalizados"])
-        carregar_auto = st.checkbox("Carregar jogos ao abrir", value=False)
+
+        st.divider()
+        with st.expander("⚙️ Filtros", expanded=True):
+            liga_nome = st.selectbox("Liga", list(LIGAS.keys()))
+            circuito_tenis = None
+            if esporte == "Tenis":
+                circuito_tenis = st.selectbox("Circuito tenis", list(TENIS_LIGAS.keys()))
+            usar_data = st.checkbox("Filtrar por data")
+            data_escolhida = st.date_input("Data").isoformat() if usar_data else None
+            # Selectbox controlado por session_state
+            filtro_status = st.selectbox(
+                "Status",
+                ["Todos", "Ao vivo", "Futuros", "Finalizados"],
+                key="filtro_status"
+            )
+            carregar_auto = st.checkbox("Carregar jogos ao abrir", value=st.session_state.carregar_auto)
+
+        # Botão separado para “Ao vivo” na sidebar
+        if st.button("⚡ Ver ao vivo agora"):
+            st.session_state.filtro_status = "Ao vivo"
+            st.session_state.carregar_auto = True
+            st.rerun()
+
         if st.button("Limpar cache ESPN"):
             try:
                 st.cache_data.clear()
@@ -1392,26 +1362,45 @@ def main():
             except Exception:
                 st.info("Cache indisponivel nesta versao do Streamlit.")
 
+    # Mobile filter (visível só em telas pequenas)
     st.markdown(
         f"""
         <div class="mobile-filter">
             <b>Esporte:</b> {esporte}<br>
             <b>Tela:</b> {pagina}<br>
             <b>Liga/Circuito:</b> {liga_nome if esporte == 'Futebol' else circuito_tenis}<br>
-            <b>Status:</b> {filtro_status}
+            <b>Status:</b> {st.session_state.filtro_status}
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    # Botões principais (Carregar e Ao vivo) logo abaixo do hero
+    col1, col2, col3 = st.columns([3, 1, 1])
+    with col1:
+        st.write("")  # espaçamento
+    with col2:
+        carregar = st.button("🔍 Carregar jogos")
+    with col3:
+        ao_vivo = st.button("🔴 Ao vivo")
+    if ao_vivo:
+        st.session_state.filtro_status = "Ao vivo"
+        carregar = True
+
+    # Decide se carrega automaticamente
+    if carregar_auto or st.session_state.carregar_auto:
+        carregar = True
+        st.session_state.carregar_auto = False  # evita loop
+
+    # Renderização conforme página
     if esporte == "Tenis":
-        st.info(f"Tenis {circuito_tenis} | {filtro_status} | previsao por forca do jogador e aprendizado.")
-        if carregar_auto or st.button("Carregar jogos de tenis"):
-            render_tenis(circuito_tenis, data_escolhida, filtro_status)
+        st.info(f"Tenis {circuito_tenis} | {st.session_state.filtro_status} | previsao por forca do jogador e aprendizado.")
+        if carregar:
+            render_tenis(circuito_tenis, data_escolhida, st.session_state.filtro_status)
     elif pagina == "Jogos":
-        st.info(f"{liga_nome} | {filtro_status} | treino minimo: {MIN_JOGOS_TREINO} jogos")
-        if carregar_auto or st.button("Carregar jogos"):
-            render_jogos(liga_nome, data_escolhida, filtro_status)
+        st.info(f"{liga_nome} | {st.session_state.filtro_status} | treino minimo: {MIN_JOGOS_TREINO} jogos")
+        if carregar:
+            render_jogos(liga_nome, data_escolhida, st.session_state.filtro_status)
     elif pagina == "Backtest 24h":
         render_backtest()
     else:
