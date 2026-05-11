@@ -120,9 +120,11 @@ def aplicar_estilo():
     st.markdown(
         """
         <style>
-        .block-container { padding-top: .85rem; max-width: 1160px; }
-        h1 { font-size: 1.8rem !important; }
+        .block-container { padding-top: .55rem; max-width: 1160px; }
+        h1 { font-size: 1.65rem !important; margin-bottom: .15rem !important; }
         h2, h3 { letter-spacing: 0 !important; }
+        [data-testid="stHeader"] { height: 2.2rem; }
+        [data-testid="stToolbar"] { display: none; }
         div[data-testid="stMetric"] {
             background: #f8fafc;
             border: 1px solid #e5e7eb;
@@ -152,17 +154,35 @@ def aplicar_estilo():
             font-size: .78rem;
             background: #f8fafc;
         }
+        .mobile-filter {
+            display: none;
+        }
         div[data-testid="stMetricValue"] { font-size: 1rem !important; }
         div[data-testid="stMetricDelta"] { font-size: .72rem !important; }
         @media (max-width: 640px) {
-            .block-container { padding: .65rem; }
-            h1 { font-size: 1.35rem !important; }
+            .block-container { padding: .35rem .55rem .8rem .55rem; }
+            [data-testid="stHeader"] { height: 1.6rem; }
+            h1 { font-size: 1.18rem !important; line-height: 1.2 !important; }
             h2 { font-size: 1.05rem !important; }
             h3 { font-size: .98rem !important; }
             p, div, span { font-size: .9rem; }
             div[data-testid="stMetric"] { padding: .38rem .45rem; }
             div[data-testid="stMetricValue"] { font-size: .92rem !important; }
             .pro-card { padding: .55rem .6rem; }
+            .mobile-filter {
+                display: block;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: .55rem .6rem;
+                background: #ffffff;
+                margin: .35rem 0 .6rem 0;
+            }
+            section[data-testid="stSidebar"] {
+                min-width: 15rem !important;
+            }
+            div[data-testid="column"] {
+                min-width: 0 !important;
+            }
         }
         </style>
         """,
@@ -923,8 +943,8 @@ def render_aprendizado():
 def main():
     aplicar_estilo()
     init_db()
-    st.title("Analisador Esportivo Pro 16 Super")
-    st.caption("Aprendizado por erros e acertos, historico por mercado e carregamento controlado.")
+    st.title("Pro 16 Super")
+    st.caption("Aprendizado por erros/acertos e carregamento controlado.")
 
     with st.sidebar:
         st.header("Menu")
@@ -942,12 +962,19 @@ def main():
             except Exception:
                 st.info("Cache indisponivel nesta versao do Streamlit.")
 
+    st.markdown(
+        f"""
+        <div class="mobile-filter">
+            <b>Tela:</b> {pagina}<br>
+            <b>Liga:</b> {liga_nome}<br>
+            <b>Status:</b> {filtro_status}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     if pagina == "Jogos":
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Liga", liga_nome)
-        c2.metric("Status", filtro_status)
-        c3.metric("Treino minimo", MIN_JOGOS_TREINO)
-        st.info("Os jogos carregam por botao para evitar travamentos e tela branca.")
+        st.info(f"{liga_nome} | {filtro_status} | treino minimo: {MIN_JOGOS_TREINO} jogos")
         if carregar_auto or st.button("Carregar jogos"):
             render_jogos(liga_nome, data_escolhida, filtro_status)
     elif pagina == "Backtest 24h":
