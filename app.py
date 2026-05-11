@@ -359,6 +359,30 @@ def parse_dt(valor):
     except Exception:
         return None
 
+def proxima_data_semana(dia_semana):
+    hoje = datetime.now().date()
+    dias = (dia_semana - hoje.weekday()) % 7
+    if dias == 0:
+        dias = 7
+    return (hoje + timedelta(days=dias)).isoformat()
+
+def datas_para_busca(modo_agenda, data_manual=None):
+    if modo_agenda == "Data manual":
+        return [data_manual] if data_manual else [None]
+    if modo_agenda == "Próxima quarta":
+        return [proxima_data_semana(2)]
+    if modo_agenda == "Próximo domingo":
+        return [proxima_data_semana(6)]
+    if modo_agenda == "Quarta + Domingo":
+        return [proxima_data_semana(2), proxima_data_semana(6)]
+    return [None]
+
+def rotulo_datas(datas):
+    datas_validas = [d for d in datas or [] if d]
+    if not datas_validas:
+        return "agenda atual"
+    return " + ".join(datas_validas)
+
 
 def pct(x):
     return f"{100 * float(x):.1f}%"
@@ -910,15 +934,29 @@ def treinar_modelo():
     return treinados
 
 
-def render_jogos(liga_nome, data_escolhida, filtro_status):
+def render_jogos(liga_nome, datas_escolhidas, filtro_status):
     liga_id = LIGAS[liga_nome]
+    jogos = []
+    erros = []
+    datas_escolhidas = datas_escolhidas or [None]
+
     with st.spinner("Carregando jogos..."):
-        payload, erro = buscar_scoreboard(liga_id, data_escolhida)
-    if erro:
-        st.error(erro)
+        for data_iso in datas_escolhidas:
+            payload, erro = buscar_scoreboard(liga_id, data_iso)
+            if erro:
+                erros.append(f"{data_iso or 'agenda atual'}: {erro}")
+                continue
+            jogos.extend(extrair_jogos(payload, liga_id))
+
+    if erros and not jogos:
+        st.error(" | ".join(erros))
         return
 
-    jogos = extrair_jogos(payload, liga_id)
+    jogos_unicos = {}
+    for jogo in jogos:
+        jogos_unicos[jogo["id"]] = jogo
+    jogos = list(jogos_unicos.values())
+
     if filtro_status == "Ao vivo":
         jogos = [j for j in jogos if j["em_jogo"]]
     elif filtro_status == "Futuros":
@@ -927,6 +965,7 @@ def render_jogos(liga_nome, data_escolhida, filtro_status):
         jogos = [j for j in jogos if j["finalizado"]]
 
     st.subheader(f"{liga_nome} - {len(jogos)} jogo(s)")
+    st.caption(f"Datas carregadas: {rotulo_datas(datas_escolhidas)}")
     if not jogos:
         st.info("Nenhum jogo encontrado com estes filtros.")
         return
@@ -1066,15 +1105,29 @@ def render_backtest():
     st.dataframe(df_bt, use_container_width=True, hide_index=True)
 
 
-def render_tenis(circuito_nome, data_escolhida, filtro_status):
+def render_tenis(circuito_nome, datas_escolhidas, filtro_status):
     circuito = TENIS_LIGAS[circuito_nome]
+    jogos = []
+    erros = []
+    datas_escolhidas = datas_escolhidas or [None]
+
     with st.spinner("Carregando jogos de tenis..."):
-        payload, erro = buscar_scoreboard_tenis(circuito, data_escolhida)
-    if erro:
-        st.error(erro)
+        for data_iso in datas_escolhidas:
+            payload, erro = buscar_scoreboard_tenis(circuito, data_iso)
+            if erro:
+                erros.append(f"{data_iso or 'agenda atual'}: {erro}")
+                continue
+            jogos.extend(extrair_jogos_tenis(payload, circuito))
+
+    if erros and not jogos:
+        st.error(" | ".join(erros))
         return
 
-    jogos = extrair_jogos_tenis(payload, circuito)
+    jogos_unicos = {}
+    for jogo in jogos:
+        jogos_unicos[jogo["id"]] = jogo
+    jogos = list(jogos_unicos.values())
+
     if filtro_status == "Ao vivo":
         jogos = [j for j in jogos if j["em_jogo"]]
     elif filtro_status == "Futuros":
@@ -1083,6 +1136,7 @@ def render_tenis(circuito_nome, data_escolhida, filtro_status):
         jogos = [j for j in jogos if j["finalizado"]]
 
     st.subheader(f"Tenis {circuito_nome} - {len(jogos)} jogo(s)")
+    st.caption(f"Datas carregadas: {rotulo_datas(datas_escolhidas)}")
     if not jogos:
         st.info("Nenhum jogo de tenis encontrado com estes filtros.")
         return
@@ -1249,9 +1303,14 @@ def main():
     filtro_status = c4.selectbox("Status", ["Todos", "Ao vivo", "Futuros", "Finalizados"])
 
     c1, c2, c3 = st.columns(3)
-    usar_data = c1.checkbox("Filtrar por data")
-    data_escolhida = c2.date_input("Data").isoformat() if usar_data else None
+    modo_agenda = c1.selectbox(
+        "Agenda",
+        ["Hoje/API", "Data manual", "Próxima quarta", "Próximo domingo", "Quarta + Domingo"],
+        index=0,
+    )
+    data_manual = c2.date_input("Data").isoformat() if modo_agenda == "Data manual" else None
     carregar_auto = c3.checkbox("Carregar ao abrir", value=False)
+    datas_escolhidas = datas_para_busca(modo_agenda, data_manual)
 
     c1, c2, c3 = st.columns(3)
     limpar_cache = c1.button("Limpar cache ESPN")
@@ -1266,15 +1325,16 @@ def main():
     if ao_vivo_agora:
         filtro_status = "Ao vivo"
         carregar = True
+        datas_escolhidas = [None]
 
     if esporte == "Tenis":
-        st.info(f"Tenis {circuito_tenis} | {filtro_status} | previsao por forca do jogador e aprendizado.")
+        st.info(f"Tenis {circuito_tenis} | {filtro_status} | {rotulo_datas(datas_escolhidas)}")
         if carregar_auto or carregar:
-            render_tenis(circuito_tenis, data_escolhida, filtro_status)
+            render_tenis(circuito_tenis, datas_escolhidas, filtro_status)
     elif pagina == "Jogos":
-        st.info(f"{liga_nome} | {filtro_status} | treino minimo: {MIN_JOGOS_TREINO} jogos")
+        st.info(f"{liga_nome} | {filtro_status} | {rotulo_datas(datas_escolhidas)} | treino minimo: {MIN_JOGOS_TREINO} jogos")
         if carregar_auto or carregar:
-            render_jogos(liga_nome, data_escolhida, filtro_status)
+            render_jogos(liga_nome, datas_escolhidas, filtro_status)
     elif pagina == "Backtest 24h":
         render_backtest()
     else:
