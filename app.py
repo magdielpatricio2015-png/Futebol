@@ -102,6 +102,51 @@ LIGAS: dict[str, str] = {
 TENIS_LIGAS: dict[str, str] = {"ATP": "atp", "WTA": "wta"}
 LIGAS_BASQUETE: dict[str, str] = {"NBA": "nba"}
 
+TIMES_FALLBACK_LIGA: dict[str, list[str]] = {
+    "bra.1": [
+        "Flamengo", "Palmeiras", "Botafogo", "Atletico-MG", "Sao Paulo",
+        "Fluminense", "Gremio", "Internacional", "Corinthians", "Cruzeiro",
+        "Bahia", "Fortaleza", "Vasco", "Santos", "Ceara", "Sport",
+        "Vitoria", "Bragantino",
+    ],
+    "bra.2": [
+        "Amazonas", "America Mineiro", "Athletico-PR", "Atletico Goianiense",
+        "Chapecoense", "Coritiba", "CRB", "Cuiaba", "Goias", "Guarani",
+        "Novorizontino", "Operario PR", "Paysandu", "Ponte Preta", "Remo",
+        "Vila Nova",
+    ],
+    "bra.copa_do_brazil": [
+        "Flamengo", "Palmeiras", "Botafogo", "Atletico-MG", "Sao Paulo",
+        "Fluminense", "Gremio", "Internacional", "Corinthians", "Cruzeiro",
+        "Bahia", "Fortaleza", "Vasco", "Santos", "Athletico-PR",
+        "America Mineiro",
+    ],
+    "eng.1": [
+        "Manchester City", "Arsenal", "Liverpool", "Chelsea",
+        "Tottenham Hotspur", "Manchester United",
+    ],
+    "esp.1": ["Real Madrid", "Barcelona", "Atletico Madrid"],
+    "ita.1": ["Inter Milan", "Juventus", "Milan"],
+    "ger.1": ["Bayern Munich", "Borussia Dortmund", "Bayer Leverkusen"],
+    "fra.1": ["Paris Saint-Germain"],
+    "uefa.champions": [
+        "Real Madrid", "Barcelona", "Manchester City", "Arsenal", "Liverpool",
+        "Bayern Munich", "Paris Saint-Germain", "Inter Milan",
+    ],
+    "uefa.europa": [
+        "Manchester United", "Tottenham Hotspur", "Chelsea", "Milan",
+        "Juventus", "Borussia Dortmund",
+    ],
+    "conmebol.libertadores": [
+        "Flamengo", "Palmeiras", "Botafogo", "Atletico-MG", "Sao Paulo",
+        "Fluminense", "Gremio", "Internacional",
+    ],
+    "conmebol.sudamericana": [
+        "Fortaleza", "Bahia", "Cruzeiro", "Corinthians", "Vasco",
+        "Bragantino", "Athletico-PR",
+    ],
+}
+
 FORCA_BASE: dict[str, int] = {
     "flamengo": 86,
     "palmeiras": 84,
@@ -538,6 +583,20 @@ def game_id_manual(prefixo: str, liga_id: str, home: str, away: str, data_jogo: 
     return raw.replace(" ", "_")
 
 
+def sugestoes_times_liga(liga_id: str, tabela: pd.DataFrame) -> list[str]:
+    if not tabela.empty and "time" in tabela.columns:
+        times = [nome_limpo(time) for time in tabela["time"].dropna().tolist()]
+        times = [time for time in times if time]
+        if len(times) >= 2:
+            return sorted(set(times))
+
+    fallback = TIMES_FALLBACK_LIGA.get(liga_id, [])
+    if len(fallback) >= 2:
+        return fallback
+
+    return ["Flamengo", "Palmeiras"]
+
+
 # ============================================================================
 # API ESPN E FORCAS
 # ============================================================================
@@ -956,17 +1015,18 @@ def tabela_placares(df: pd.DataFrame, home: str, away: str, n: int = 8) -> pd.Da
 
 def tela_futebol() -> None:
     st.header("Futebol")
-    liga_nome = st.selectbox("Liga", list(LIGAS.keys()))
+    liga_nome = st.selectbox("Liga", list(LIGAS.keys()), key="futebol_liga")
     liga_id = LIGAS[liga_nome]
 
     tabela = buscar_tabela_espn(liga_id)
-    sugestoes = sorted(set(FORCA_BASE.keys()) | set(tabela["normalizado"].tolist() if not tabela.empty else []))
+    sugestoes = sugestoes_times_liga(liga_id, tabela)
+    away_default = 1 if len(sugestoes) > 1 else 0
 
     c1, c2, c3 = st.columns([1, 1, 0.7])
     with c1:
-        home = st.text_input("Mandante", value=sugestoes[0] if sugestoes else "flamengo")
+        home = st.selectbox("Mandante", sugestoes, index=0, key=f"home_{liga_id}")
     with c2:
-        away = st.text_input("Visitante", value=sugestoes[1] if len(sugestoes) > 1 else "palmeiras")
+        away = st.selectbox("Visitante", sugestoes, index=away_default, key=f"away_{liga_id}")
     with c3:
         data_jogo = st.date_input("Data", value=date.today())
 
