@@ -20,7 +20,7 @@ import os
 import sqlite3
 import time
 import unicodedata
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 import pandas as pd
@@ -583,6 +583,19 @@ def game_id_manual(prefixo: str, liga_id: str, home: str, away: str, data_jogo: 
     return raw.replace(" ", "_")
 
 
+def parse_data_espn(valor: Any) -> Optional[datetime]:
+    if not valor:
+        return None
+    texto = str(valor).replace("Z", "+00:00")
+    try:
+        data_hora = datetime.fromisoformat(texto)
+        if data_hora.tzinfo is None:
+            data_hora = data_hora.replace(tzinfo=timezone.utc)
+        return data_hora.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
 def sugestoes_times_liga(liga_id: str, tabela: pd.DataFrame) -> list[str]:
     if not tabela.empty and "time" in tabela.columns:
         times = [nome_limpo(time) for time in tabela["time"].dropna().tolist()]
@@ -661,6 +674,71 @@ def buscar_tabela_espn(liga_id: str) -> pd.DataFrame:
                     }
                 )
     return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=60 * 10, show_spinner=False)
+def buscar_jogos_espn(liga_id: str, inicio_iso: str, fim_iso: str) -> pd.DataFrame:
+    inicio = datetime.fromisoformat(inicio_iso).astimezone(timezone.utc)
+    fim = datetime.fromisoformat(fim_iso).astimezone(timezone.utc)
+    dias = sorted({inicio.strftime("%Y%m%d"), fim.strftime("%Y%m%d")})
+    rows: list[dict[str, Any]] = []
+
+    for dia in dias:
+        url = f"{ESPN_BASE}/{liga_id}/scoreboard"
+        data = api_get_json(url, {"dates": dia, "limit": 200})
+        if not data:
+            continue
+
+        for event in data.get("events", []) or []:
+            data_jogo = parse_data_espn(event.get("date"))
+            if not data_jogo or data_jogo < inicio or data_jogo > fim:
+                continue
+
+            competition = (event.get("competitions") or [{}])[0]
+            competitors = competition.get("competitors") or []
+            home = None
+            away = None
+            home_score = None
+            away_score = None
+
+            for comp in competitors:
+                team = comp.get("team") or {}
+                nome = team.get("displayName") or team.get("shortDisplayName") or team.get("name")
+                if comp.get("homeAway") == "home":
+                    home = nome
+                    home_score = comp.get("score")
+                elif comp.get("homeAway") == "away":
+                    away = nome
+                    away_score = comp.get("score")
+
+            if not home or not away:
+                continue
+
+            status = event.get("status") or {}
+            status_type = status.get("type") or {}
+            completed = bool(status_type.get("completed"))
+            state = status_type.get("state") or ""
+            detalhe = status_type.get("shortDetail") or status_type.get("detail") or ""
+
+            rows.append(
+                {
+                    "game_id": str(event.get("id") or competition.get("id") or ""),
+                    "data_utc": data_jogo.isoformat(),
+                    "data_local": data_jogo.astimezone().strftime("%d/%m %H:%M"),
+                    "data_jogo": data_jogo.date().isoformat(),
+                    "home": nome_limpo(home),
+                    "away": nome_limpo(away),
+                    "home_score": int(home_score) if str(home_score).isdigit() else None,
+                    "away_score": int(away_score) if str(away_score).isdigit() else None,
+                    "status": detalhe or state,
+                    "completed": completed,
+                }
+            )
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    return df.drop_duplicates(subset=["game_id"]).sort_values("data_utc").reset_index(drop=True)
 
 
 def forca_dinamica_futebol(nome: str, liga_id: str) -> tuple[float, str]:
@@ -920,6 +998,120 @@ def registrar_feedback(game_id: str, codigo: str, acertou: int) -> None:
     recalcular_ajustes()
 
 
+def mercado_acertou(codigo: str, home_score: int, away_score: int) -> int:
+    total = home_score + away_score
+    casa = home_score > away_score
+    empate = home_score == away_score
+    fora = home_score < away_score
+    ambos = home_score > 0 and away_score > 0
+
+    regras = {
+        "casa_vence": casa,
+        "empate": empate,
+        "fora_vence": fora,
+        "dupla_1x": casa or empate,
+        "dupla_x2": empate or fora,
+        "dupla_12": casa or fora,
+        "over_15": total > 1.5,
+        "over_25": total > 2.5,
+        "under_35": total < 3.5,
+        "ambos_marcam": ambos,
+        "jogador_1_vence": casa,
+        "jogador_2_vence": fora,
+    }
+    return int(bool(regras.get(codigo, False)))
+
+
+def aprender_ultimas_24h(liga_id: Optional[str] = None) -> int:
+    agora = datetime.now(timezone.utc)
+    inicio = agora - timedelta(hours=24)
+    ligas = [liga_id] if liga_id else list(LIGAS.values())
+    atualizados = 0
+
+    for liga in ligas:
+        jogos = buscar_jogos_espn(liga, inicio.isoformat(), agora.isoformat())
+        if jogos.empty:
+            continue
+        finalizados = jogos[jogos["completed"] == True].copy()
+        if finalizados.empty:
+            continue
+
+        for _, jogo in finalizados.iterrows():
+            if pd.isna(jogo["home_score"]) or pd.isna(jogo["away_score"]):
+                continue
+
+            previsoes = ler_tabela(
+                """
+                SELECT *
+                FROM previsoes
+                WHERE esporte = 'futebol'
+                  AND liga_id = ?
+                  AND finalizado = 0
+                  AND data_jogo >= ?
+                  AND data_jogo <= ?
+                """,
+                (
+                    liga,
+                    (inicio.date() - timedelta(days=1)).isoformat(),
+                    agora.date().isoformat(),
+                ),
+            )
+
+            if previsoes.empty:
+                continue
+
+            jogo_id = str(jogo["game_id"])
+            jogo_data = str(jogo["data_jogo"])
+            jogo_home = normalizar(str(jogo["home"]))
+            jogo_away = normalizar(str(jogo["away"]))
+            previsoes = previsoes[
+                (previsoes["game_id"].astype(str) == jogo_id)
+                | (
+                    (previsoes["data_jogo"].astype(str) == jogo_data)
+                    & (previsoes["home"].map(normalizar) == jogo_home)
+                    & (previsoes["away"].map(normalizar) == jogo_away)
+                )
+            ]
+
+            if previsoes.empty:
+                continue
+
+            home_score = int(jogo["home_score"])
+            away_score = int(jogo["away_score"])
+            for _, prev in previsoes.iterrows():
+                codigo_base = str(prev.get("codigo_base") or "")
+                codigo_apr = str(prev.get("codigo_aprendido") or codigo_base)
+                acertou_base = mercado_acertou(codigo_base, home_score, away_score)
+                acertou_apr = mercado_acertou(codigo_apr, home_score, away_score)
+
+                executar(
+                    """
+                    UPDATE previsoes
+                    SET game_id = ?,
+                        home_score = ?,
+                        away_score = ?,
+                        acertou_base = ?,
+                        acertou_aprendido = ?,
+                        finalizado = 1
+                    WHERE id = ?
+                    """,
+                    (
+                        str(jogo["game_id"]),
+                        home_score,
+                        away_score,
+                        acertou_base,
+                        acertou_apr,
+                        int(prev["id"]),
+                    ),
+                )
+                registrar_feedback(str(jogo["game_id"]), codigo_apr, acertou_apr)
+                atualizados += 1
+
+    if atualizados:
+        recalcular_ajustes()
+    return atualizados
+
+
 def recalcular_ajustes() -> None:
     df = ler_tabela(
         """
@@ -1018,17 +1210,48 @@ def tela_futebol() -> None:
     liga_nome = st.selectbox("Liga", list(LIGAS.keys()), key="futebol_liga")
     liga_id = LIGAS[liga_nome]
 
+    aprender_key = f"aprendizado_24h_{liga_id}"
+    if time.time() - float(st.session_state.get(aprender_key, 0)) > 600:
+        atualizados = aprender_ultimas_24h(liga_id)
+        st.session_state[aprender_key] = time.time()
+        st.session_state[f"{aprender_key}_count"] = atualizados
+
+    atualizados_24h = int(st.session_state.get(f"{aprender_key}_count", 0))
+    if atualizados_24h:
+        st.success(f"Aprendizado das ultimas 24h atualizado: {atualizados_24h} previsao(oes) revisada(s).")
+
     tabela = buscar_tabela_espn(liga_id)
     sugestoes = sugestoes_times_liga(liga_id, tabela)
     away_default = 1 if len(sugestoes) > 1 else 0
+    agora = datetime.now(timezone.utc)
+    jogos_24h = buscar_jogos_espn(liga_id, agora.isoformat(), (agora + timedelta(hours=24)).isoformat())
 
-    c1, c2, c3 = st.columns([1, 1, 0.7])
-    with c1:
-        home = st.selectbox("Mandante", sugestoes, index=0, key=f"home_{liga_id}")
-    with c2:
-        away = st.selectbox("Visitante", sugestoes, index=away_default, key=f"away_{liga_id}")
-    with c3:
-        data_jogo = st.date_input("Data", value=date.today())
+    modo_manual = jogos_24h.empty
+    if not jogos_24h.empty:
+        st.caption(f"{len(jogos_24h)} jogo(s) encontrado(s) de agora ate as proximas 24h.")
+        opcoes = [
+            f"{row.data_local} - {row.home} x {row.away} ({row.status or 'agendado'})"
+            for row in jogos_24h.itertuples()
+        ]
+        escolha = st.selectbox("Partida da liga nas proximas 24h", opcoes, key=f"jogo_{liga_id}")
+        jogo = jogos_24h.iloc[opcoes.index(escolha)]
+        home = str(jogo["home"])
+        away = str(jogo["away"])
+        data_jogo = datetime.fromisoformat(str(jogo["data_utc"])).date()
+        game_id = str(jogo["game_id"]) or game_id_manual("futebol", liga_id, home, away, data_jogo)
+        modo_manual = st.checkbox("Escolher outro jogo manualmente", value=False)
+    else:
+        st.warning("Nao encontrei jogos dessa liga nas proximas 24h pela ESPN. Use a selecao manual abaixo.")
+
+    if modo_manual:
+        c1, c2, c3 = st.columns([1, 1, 0.7])
+        with c1:
+            home = st.selectbox("Mandante", sugestoes, index=0, key=f"home_{liga_id}")
+        with c2:
+            away = st.selectbox("Visitante", sugestoes, index=away_default, key=f"away_{liga_id}")
+        with c3:
+            data_jogo = st.date_input("Data", value=date.today())
+        game_id = game_id_manual("futebol", liga_id, home, away, data_jogo)
 
     if normalizar(home) == normalizar(away):
         st.error("Escolha dois times diferentes.")
@@ -1045,7 +1268,6 @@ def tela_futebol() -> None:
     prob_apr, ajuste = aplicar_ajuste(prob_base, codigo, contexto)
     placar_top = matriz.iloc[0]
     placar = f"{int(placar_top.home_gols)} x {int(placar_top.away_gols)}"
-    game_id = game_id_manual("futebol", liga_id, home, away, data_jogo)
 
     st.subheader(f"{nome_limpo(home)} x {nome_limpo(away)}")
     m1, m2, m3, m4 = st.columns(4)
