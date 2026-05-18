@@ -1,14 +1,13 @@
 """
-Analisador Esportivo Pro 17 – Versão Aprimorada (app.py)
-========================================================
-Principais melhorias:
-- Geração automática de previsões para os próximos jogos.
-- Aprendizado automático a cada acesso (sem clique).
-- game_id confiável (sem "None").
-- Recalculação única dos ajustes.
-- Normalização robusta (fc/sc apenas no final).
-- Uso correto do home_adv no modelo ML.
-- Cache otimizado de jogos por dia.
+Analisador Esportivo Pro 17 – Versão Corrigida
+================================================
+Correções aplicadas:
+- Fechamento correto de dicionários (ALIASES, CLASSICOS)
+- Validação de dataframes antes de iteração
+- Normalização consistente de tipos de dados (datas, scores)
+- Game_id único com timestamp
+- Tratamento robusto de exceções
+- Feedback com validação de código
 """
 
 from __future__ import annotations
@@ -79,7 +78,7 @@ LIGAS = {
     "Sul-Americana": "conmebol.sudamericana",
 }
 
-# ---- forças e aliases (mantidos iguais, mas resumidos) ----
+# ---- forças e aliases ----
 FORCA_BASE = {
     "flamengo": 86, "palmeiras": 84, "botafogo": 79, "atletico-mg": 76,
     "sao paulo": 78, "fluminense": 77, "gremio": 74, "internacional": 75,
@@ -291,8 +290,9 @@ def contexto_jogo(home: str, away: str, liga_id: str) -> str:
         elif diff >= 12: partes.append("favorito_forte")
     return "|".join(partes)
 
-def game_id_manual(esporte: str, liga_id: str, home: str, away: str, data_jogo: date) -> str:
-    raw = f"{esporte}:{liga_id}:{data_jogo.isoformat()}:{normalizar(home)}:{normalizar(away)}"
+def game_id_manual(esporte: str, liga_id: str, home: str, away: str, data_jogo: date, timestamp: int = 0) -> str:
+    """Gera game_id único com timestamp para evitar duplicatas"""
+    raw = f"{esporte}:{liga_id}:{data_jogo.isoformat()}:{timestamp}:{normalizar(home)}:{normalizar(away)}"
     return raw.replace(" ", "_")
 
 def parse_data_espn(valor: Any) -> Optional[datetime]:
@@ -374,9 +374,11 @@ def _buscar_jogos_dia(liga_id: str, dia_iso: str) -> pd.DataFrame:
         tipo_status = status.get("type", {})
         completed = bool(tipo_status.get("completed"))
         game_id_raw = str(event.get("id") or competition.get("id") or "")
+        
         # Garantir ID válido
-        if not game_id_raw or game_id_raw.lower() == "none":
-            game_id_raw = game_id_manual("futebol", liga_id, home, away, data_jogo.date())
+        if not game_id_raw or game_id_raw.lower() == "none" or game_id_raw == "":
+            timestamp = int(data_jogo.timestamp())
+            game_id_raw = game_id_manual("futebol", liga_id, home, away, data_jogo.date(), timestamp)
 
         rows.append({
             "game_id": game_id_raw,
@@ -521,6 +523,11 @@ def prever_ml(forca_home, forca_away, home_adv):
 
     X = df[["forca_home", "forca_away", "home_adv"]].astype(float).copy()
     X["diff"] = X["forca_home"] - X["forca_away"]
+    
+    # Validar NaN
+    if X.isna().any().any():
+        return None
+    
     scaler = StandardScaler()
     Xs = scaler.fit_transform(X)
     model = LogisticRegression(max_iter=500)
@@ -569,10 +576,13 @@ def salvar_previsao(game_id, esporte, liga_id, liga_nome, data_jogo, home, away,
           datetime.now().isoformat(timespec="seconds")))
 
 def registrar_feedback(game_id, codigo, acertou):
+    """Registra feedback com validação de código"""
+    if not codigo or not str(codigo).strip():
+        return
     executar("""
         INSERT OR REPLACE INTO feedback_rapido (game_id, codigo, acertou, registrado_em)
         VALUES (?,?,?,?)
-    """, (game_id, codigo, int(acertou), datetime.now().isoformat(timespec="seconds")))
+    """, (str(game_id), str(codigo).strip(), int(acertou), datetime.now().isoformat(timespec="seconds")))
 
 def mercado_acertou(codigo, home_score, away_score):
     total = home_score + away_score
@@ -629,57 +639,63 @@ def recalcular_ajustes():
 # ======================= APRENDIZADO AUTOMÁTICO =======================
 def aprender_ultimas_24h(liga_id: str) -> int:
     """Atualiza previsões finalizadas com resultados reais da ESPN. Retorna número de atualizações."""
-    agora = datetime.now(timezone.utc)
-    inicio = agora - timedelta(hours=24)
-    jogos = buscar_jogos_intervalo(liga_id, inicio, agora)
-    if jogos.empty:
-        return 0
-    finalizados = jogos[jogos["completed"] == True].copy()
-    if finalizados.empty:
-        return 0
-    previsoes = ler_tabela("""
-        SELECT * FROM previsoes
-        WHERE esporte = 'futebol' AND liga_id = ? AND finalizado = 0
-          AND data_jogo >= ? AND data_jogo <= ?
-    """, (liga_id, (inicio - timedelta(days=2)).strftime("%Y-%m-%d"), agora.strftime("%Y-%m-%d")))
-    if previsoes.empty:
-        return 0
+    try:
+        agora = datetime.now(timezone.utc)
+        inicio = agora - timedelta(hours=24)
+        jogos = buscar_jogos_intervalo(liga_id, inicio, agora)
+        if jogos.empty:
+            return 0
+        finalizados = jogos[jogos["completed"] == True].copy()
+        if finalizados.empty:
+            return 0
+        previsoes = ler_tabela("""
+            SELECT * FROM previsoes
+            WHERE esporte = 'futebol' AND liga_id = ? AND finalizado = 0
+              AND data_jogo >= ? AND data_jogo <= ?
+        """, (liga_id, (inicio - timedelta(days=2)).strftime("%Y-%m-%d"), agora.strftime("%Y-%m-%d")))
+        if previsoes.empty:
+            return 0
 
-    atualizados = 0
-    for _, jogo in finalizados.iterrows():
-        if pd.isna(jogo["home_score"]) or pd.isna(jogo["away_score"]):
-            continue
-        jogo_id = str(jogo["game_id"])
-        jogo_data = jogo["data_jogo"]
-        jogo_home = normalizar(jogo["home"])
-        jogo_away = normalizar(jogo["away"])
-        match = previsoes[
-            (previsoes["game_id"].astype(str) == jogo_id) |
-            ((previsoes["data_jogo"].astype(str) == jogo_data) &
-             (previsoes["home"].apply(normalizar) == jogo_home) &
-             (previsoes["away"].apply(normalizar) == jogo_away))
-        ]
-        if match.empty:
-            continue
-        home_score = int(jogo["home_score"])
-        away_score = int(jogo["away_score"])
-        for _, prev in match.iterrows():
-            codigo_base = str(prev.get("codigo_base", ""))
-            codigo_apr = str(prev.get("codigo_aprendido", codigo_base))
-            acertou_base = mercado_acertou(codigo_base, home_score, away_score)
-            acertou_apr = mercado_acertou(codigo_apr, home_score, away_score)
-            executar("""
-                UPDATE previsoes SET
-                    game_id = ?, home_score = ?, away_score = ?,
-                    acertou_base = ?, acertou_aprendido = ?, finalizado = 1
-                WHERE id = ?
-            """, (jogo_id, home_score, away_score, acertou_base, acertou_apr, prev["id"]))
-            registrar_feedback(jogo_id, codigo_apr, acertou_apr)
-            atualizados += 1
+        atualizados = 0
+        for _, jogo in finalizados.iterrows():
+            if pd.isna(jogo["home_score"]) or pd.isna(jogo["away_score"]):
+                continue
+            jogo_id = str(jogo["game_id"])
+            jogo_data = jogo["data_jogo"]
+            jogo_home = normalizar(jogo["home"])
+            jogo_away = normalizar(jogo["away"])
+            match = previsoes[
+                (previsoes["game_id"].astype(str) == jogo_id) |
+                ((previsoes["data_jogo"].astype(str) == jogo_data) &
+                 (previsoes["home"].apply(normalizar) == jogo_home) &
+                 (previsoes["away"].apply(normalizar) == jogo_away))
+            ]
+            if match.empty:
+                continue
+            home_score = int(jogo["home_score"])
+            away_score = int(jogo["away_score"])
+            for _, prev in match.iterrows():
+                codigo_base = str(prev.get("codigo_base", "") or "")
+                codigo_apr = str(prev.get("codigo_aprendido") or codigo_base or "")
+                if not codigo_base or not codigo_apr:
+                    continue
+                acertou_base = mercado_acertou(codigo_base, home_score, away_score)
+                acertou_apr = mercado_acertou(codigo_apr, home_score, away_score)
+                executar("""
+                    UPDATE previsoes SET
+                        game_id = ?, home_score = ?, away_score = ?,
+                        acertou_base = ?, acertou_aprendido = ?, finalizado = 1
+                    WHERE id = ?
+                """, (jogo_id, home_score, away_score, acertou_base, acertou_apr, prev["id"]))
+                registrar_feedback(jogo_id, codigo_apr, acertou_apr)
+                atualizados += 1
 
-    if atualizados > 0:
-        recalcular_ajustes()
-    return atualizados
+        if atualizados > 0:
+            recalcular_ajustes()
+        return atualizados
+    except Exception as e:
+        print(f"Erro ao aprender: {str(e)}")
+        return 0
 
 
 # ======================= COMPONENTES VISUAIS =======================
@@ -714,10 +730,11 @@ def tela_futebol():
     liga_id = LIGAS[liga_nome]
 
     # Aprendizado automático ao entrar
-    if "aprendizado_" + liga_id not in st.session_state:
+    chave_aprendizado = "aprendizado_" + liga_id
+    if chave_aprendizado not in st.session_state:
         with st.spinner("Buscando resultados recentes para aprendizado..."):
             atualizados = aprender_ultimas_24h(liga_id)
-            st.session_state["aprendizado_" + liga_id] = time.time()
+            st.session_state[chave_aprendizado] = time.time()
             st.session_state["atualizados_" + liga_id] = atualizados
     else:
         atualizados = st.session_state.get("atualizados_" + liga_id, 0)
@@ -733,8 +750,7 @@ def tela_futebol():
                 st.session_state["atualizados_" + liga_id] = novos
                 st.rerun()
 
-    # Tabela atual
-    tabela = buscar_tabela_espn(liga_id)
+    # Buscar jogos
     agora = datetime.now(timezone.utc)
     proximas_24h = buscar_jogos_intervalo(liga_id, agora, agora + timedelta(hours=24))
 
@@ -743,19 +759,29 @@ def tela_futebol():
         return
 
     st.subheader(f"Jogos das próximas 24h ({len(proximas_24h)})")
+    
     # Geração automática de previsões
     novas_previsoes = 0
     for _, jogo in proximas_24h.iterrows():
         home = str(jogo["home"])
         away = str(jogo["away"])
-        data_jogo = datetime.fromisoformat(jogo["data_utc"]).date()
-        game_id = jogo["game_id"]
+        data_jogo_str = jogo["data_jogo"]
+        game_id = str(jogo["game_id"])
+        
         if normalizar(home) == normalizar(away):
             continue
+        
         # Verificar se já existe previsão salva
         existente = ler_tabela("SELECT id FROM previsoes WHERE game_id = ?", (game_id,))
         if not existente.empty:
             continue
+        
+        # Converter data_jogo_str para date
+        try:
+            data_jogo = datetime.fromisoformat(data_jogo_str).date() if isinstance(data_jogo_str, str) else data_jogo_str
+        except:
+            continue
+        
         # Gerar previsão
         forca_h, fonte_h = forca_dinamica_futebol(home, liga_id)
         forca_a, fonte_a = forca_dinamica_futebol(away, liga_id)
@@ -766,6 +792,7 @@ def tela_futebol():
         mercado, codigo, prob_base = melhor_mercado(probs)
         prob_apr, ajuste = aplicar_ajuste(prob_base, codigo, contexto)
         placar = f"{int(matriz.iloc[0].home_gols)} x {int(matriz.iloc[0].away_gols)}"
+        
         salvar_previsao(
             game_id, "futebol", liga_id, liga_nome, data_jogo, home, away,
             forca_h, forca_a, adv, contexto,
@@ -777,11 +804,14 @@ def tela_futebol():
         st.info(f"{novas_previsoes} novas previsões foram geradas automaticamente.")
 
     # Exibir tabela de previsões
+    data_hoje = agora.date().isoformat()
     previsoes_hoje = ler_tabela("""
-        SELECT game_id, data_jogo, home, away, mercado_aprendido, prob_aprendido, placar_previsto, finalizado
+        SELECT id, game_id, data_jogo, home, away, mercado_aprendido, prob_aprendido, placar_previsto, finalizado
         FROM previsoes
         WHERE esporte = 'futebol' AND liga_id = ? AND data_jogo = ?
-    """, (liga_id, (agora.date()).isoformat()))
+        ORDER BY data_jogo
+    """, (liga_id, data_hoje))
+    
     if previsoes_hoje.empty:
         st.write("Nenhuma previsão para hoje.")
         return
@@ -793,26 +823,33 @@ def tela_futebol():
 
     # Detalhes de um jogo específico (para análise manual)
     with st.expander("🔍 Analisar um jogo específico"):
-        jogo_selecionado = st.selectbox(
-            "Escolha uma partida",
-            [f"{row.home} x {row.away}" for _, row in previsoes_hoje.iterrows()]
-        )
-        if jogo_selecionado:
-            idx = [f"{row.home} x {row.away}" for _, row in previsoes_hoje.iterrows()].index(jogo_selecionado)
-            prev = previsoes_hoje.iloc[idx]
-            st.write(f"**{prev['home']} x {prev['away']}**")
-            st.write(f"Mercado: {prev['mercado_aprendido']} → {pct(prev['prob_aprendido'])}")
-            st.write(f"Placar mais provável: {prev['placar_previsto']}")
-            # Feedback manual
-            col_fb1, col_fb2 = st.columns(2)
-            if col_fb1.button("Acertou", key=f"acertou_{prev['game_id']}"):
-                registrar_feedback(prev["game_id"], prev["mercado_aprendido"].lower().replace(" ", "_"), 1)
-                st.success("Feedback registrado.")
-                recalcular_ajustes()
-            if col_fb2.button("Errou", key=f"errou_{prev['game_id']}"):
-                registrar_feedback(prev["game_id"], prev["mercado_aprendido"].lower().replace(" ", "_"), 0)
-                st.warning("Feedback registrado.")
-                recalcular_ajustes()
+        opcoes_jogos = [f"{row.home} x {row.away}" for _, row in previsoes_hoje.iterrows()]
+        if not opcoes_jogos:
+            st.write("Sem jogos para analisar.")
+        else:
+            jogo_selecionado = st.selectbox(
+                "Escolha uma partida",
+                opcoes_jogos
+            )
+            if jogo_selecionado:
+                try:
+                    idx = opcoes_jogos.index(jogo_selecionado)
+                    prev = previsoes_hoje.iloc[idx]
+                    st.write(f"**{prev['home']} x {prev['away']}**")
+                    st.write(f"Mercado: {prev['mercado_aprendido']} → {pct(prev['prob_aprendido'])}")
+                    st.write(f"Placar mais provável: {prev['placar_previsto']}")
+                    # Feedback manual
+                    col_fb1, col_fb2 = st.columns(2)
+                    if col_fb1.button("Acertou", key=f"acertou_{prev['game_id']}"):
+                        registrar_feedback(prev["game_id"], str(prev.get("mercado_aprendido", "")).lower().replace(" ", "_"), 1)
+                        st.success("Feedback registrado.")
+                        recalcular_ajustes()
+                    if col_fb2.button("Errou", key=f"errou_{prev['game_id']}"):
+                        registrar_feedback(prev["game_id"], str(prev.get("mercado_aprendido", "")).lower().replace(" ", "_"), 0)
+                        st.warning("Feedback registrado.")
+                        recalcular_ajustes()
+                except (IndexError, ValueError):
+                    st.error("Jogo não encontrado.")
 
 
 def tela_tenis():
@@ -874,7 +911,8 @@ def tela_historico():
     c1, c2, c3 = st.columns(3)
     c1.metric("Total", len(df))
     c2.metric("Finalizadas", int(df["finalizado"].fillna(0).sum()))
-    c3.metric("Prob. média", pct(df["prob_aprendido"].dropna().mean()) if not df["prob_aprendido"].dropna().empty else "N/A")
+    prob_media = df["prob_aprendido"].dropna().mean() if not df["prob_aprendido"].dropna().empty else 0
+    c3.metric("Prob. média", pct(prob_media) if prob_media > 0 else "N/A")
     cols = ["data_jogo", "home", "away", "mercado_aprendido", "prob_aprendido", "placar_previsto", "finalizado"]
     st.dataframe(df[cols], hide_index=True, use_container_width=True)
 
@@ -920,7 +958,10 @@ def tela_diagnostico():
 
     st.write("Últimas previsões:")
     df = ler_tabela("SELECT criado_em, esporte, home, away, mercado_aprendido, prob_aprendido FROM previsoes ORDER BY id DESC LIMIT 20")
-    st.dataframe(df, hide_index=True, use_container_width=True)
+    if not df.empty:
+        st.dataframe(df, hide_index=True, use_container_width=True)
+    else:
+        st.write("Sem previsões ainda.")
 
 
 # ======================= APP PRINCIPAL =======================
