@@ -132,25 +132,10 @@ CLASSICOS = {
 # ======================= ESTILO MODERNO =======================
 def aplicar_estilo() -> None:
     st.markdown("""<style>
-    /* Cores principais */
-    :root {
-        --primary: #6366f1;
-        --primary-light: #818cf8;
-        --primary-dark: #4f46e5;
-        --accent: #ec4899;
-        --success: #10b981;
-        --warning: #f59e0b;
-        --danger: #ef4444;
-        --bg: #0f172a;
-        --bg-light: #1e293b;
-        --text: #f1f5f9;
-        --text-muted: #cbd5e1;
-    }
-
-    /* Layout base */
+    /* Layout base - Fundo claro */
     html, body, [data-testid="stAppViewContainer"] {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        color: #f1f5f9;
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        color: #0f172a;
     }
     
     .block-container {
@@ -170,52 +155,51 @@ def aplicar_estilo() -> None:
     }
     
     h2 {
-        color: #818cf8 !important;
+        color: #4f46e5 !important;
         font-weight: 700 !important;
-        border-bottom: 2px solid rgba(99, 102, 241, 0.3);
+        border-bottom: 2px solid #e2e8f0;
         padding-bottom: 0.8rem !important;
         margin-top: 1.5rem !important;
     }
 
     h3 {
-        color: #a5f3fc !important;
+        color: #0891b2 !important;
         font-weight: 600 !important;
     }
 
     /* Sidebar */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%) !important;
-        border-right: 1px solid rgba(99, 102, 241, 0.2);
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
+        border-right: 1px solid #e2e8f0;
     }
     
     section[data-testid="stSidebar"] * {
-        color: #f1f5f9 !important;
+        color: #0f172a !important;
     }
 
     /* Cards e Containers */
     .card-modern {
-        background: rgba(30, 41, 59, 0.8);
-        border: 1px solid rgba(99, 102, 241, 0.3);
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        border: 1px solid #e2e8f0;
         border-radius: 12px;
         padding: 1.2rem;
         margin: 0.8rem 0;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
-        backdrop-filter: blur(10px);
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
         transition: all 0.3s ease;
     }
     
     .card-modern:hover {
-        border-color: rgba(99, 102, 241, 0.6);
-        box-shadow: 0 8px 25px rgba(99, 102, 241, 0.2);
+        border-color: #6366f1;
+        box-shadow: 0 8px 20px rgba(99, 102, 241, 0.12);
     }
 
     /* Metrics */
     div[data-testid="stMetric"] {
-        background: rgba(30, 41, 59, 0.8) !important;
-        border: 1px solid rgba(99, 102, 241, 0.3) !important;
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
+        border: 1px solid #e2e8f0 !important;
         border-radius: 12px !important;
         padding: 1rem !important;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2) !important;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08) !important;
     }
 
     /* Botões */
@@ -223,6 +207,7 @@ def aplicar_estilo() -> None:
         border-radius: 8px !important;
         font-weight: 600 !important;
         border: none !important;
+        color: white !important;
     }
 
     button:hover {
@@ -237,53 +222,53 @@ def aplicar_estilo() -> None:
         margin: 0.3rem 0.4rem 0.3rem 0;
         font-size: 0.8rem;
         font-weight: 600;
-        border: 1px solid rgba(255,255,255,0.1);
+        border: 1px solid #e2e8f0;
     }
 
     .chip-green {
-        background: rgba(16, 185, 129, 0.2);
-        color: #6ee7b7;
-        border-color: rgba(16, 185, 129, 0.5);
+        background: #dcfce7;
+        color: #166534;
+        border-color: #86efac;
     }
 
     .chip-blue {
-        background: rgba(99, 102, 241, 0.2);
-        color: #818cf8;
-        border-color: rgba(99, 102, 241, 0.5);
+        background: #dbeafe;
+        color: #1e40af;
+        border-color: #7dd3fc;
     }
 
     .chip-yellow {
-        background: rgba(245, 158, 11, 0.2);
-        color: #fcd34d;
-        border-color: rgba(245, 158, 11, 0.5);
+        background: #fef3c7;
+        color: #92400e;
+        border-color: #fde047;
     }
 
     .chip-red {
-        background: rgba(239, 68, 68, 0.2);
-        color: #fca5a5;
-        border-color: rgba(239, 68, 68, 0.5);
+        background: #fee2e2;
+        color: #991b1b;
+        border-color: #fca5a5;
     }
 
     .chip-purple {
-        background: rgba(168, 85, 247, 0.2);
-        color: #d8b4fe;
-        border-color: rgba(168, 85, 247, 0.5);
+        background: #f3e8ff;
+        color: #6b21a8;
+        border-color: #d8b4fe;
     }
 
     /* Tabelas */
     div[data-testid="stDataFrame"] {
-        background: rgba(30, 41, 59, 0.8) !important;
+        background: white !important;
     }
 
     /* Expanders */
     details {
-        background: rgba(30, 41, 59, 0.8) !important;
-        border: 1px solid rgba(99, 102, 241, 0.3) !important;
+        background: white !important;
+        border: 1px solid #e2e8f0 !important;
         border-radius: 8px !important;
     }
 
     details summary {
-        color: #818cf8 !important;
+        color: #4f46e5 !important;
         font-weight: 600 !important;
     }
 
@@ -293,21 +278,32 @@ def aplicar_estilo() -> None:
     }
     
     div[data-testid="stAlert"] {
-        background: rgba(30, 41, 59, 0.9) !important;
-        border-left: 4px solid #6366f1 !important;
+        background: #f0f9ff !important;
+        border-left: 4px solid #0284c7 !important;
+        color: #0c4a6e !important;
     }
 
     /* Input fields */
     input, select, textarea {
-        background: rgba(30, 41, 59, 0.9) !important;
-        border: 1px solid rgba(99, 102, 241, 0.3) !important;
-        color: #f1f5f9 !important;
+        background: white !important;
+        border: 1px solid #e2e8f0 !important;
+        color: #0f172a !important;
         border-radius: 8px !important;
     }
 
     input:focus, select:focus, textarea:focus {
         border-color: #6366f1 !important;
         box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1) !important;
+    }
+
+    /* Textos */
+    p, span, label {
+        color: #0f172a !important;
+    }
+
+    /* Links */
+    a {
+        color: #6366f1 !important;
     }
     </style>""", unsafe_allow_html=True)
 
@@ -644,18 +640,29 @@ def prob_tenis(fa, fb, superficie):
 def salvar_previsao(game_id, esporte, liga_id, liga_nome, data_jogo, home, away,
                     forca_home, forca_away, home_adv, contexto,
                     mercado, codigo, prob_base, prob_apr, ajuste, placar):
-    executar("""
-        INSERT OR REPLACE INTO previsoes (
-            game_id, esporte, liga_id, liga_nome, data_jogo, home, away,
-            forca_home, forca_away, home_adv, contexto,
-            mercado_base, codigo_base, prob_base,
-            mercado_aprendido, codigo_aprendido, prob_aprendido,
-            ajuste_aplicado, placar_previsto, criado_em
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
-    """, (game_id, esporte, liga_id, liga_nome, data_jogo.isoformat(), home, away,
-          forca_home, forca_away, home_adv, contexto,
-          mercado, codigo, prob_base, mercado, codigo, prob_apr, ajuste, placar,
-          datetime.now().isoformat(timespec="seconds")))
+    try:
+        # Converter data_jogo para string se necessário
+        data_str = data_jogo.isoformat() if hasattr(data_jogo, 'isoformat') else str(data_jogo)
+        agora = datetime.now().isoformat(timespec="seconds")
+        
+        executar("""
+            INSERT OR REPLACE INTO previsoes (
+                game_id, esporte, liga_id, liga_nome, data_jogo, home, away,
+                forca_home, forca_away, home_adv, contexto,
+                mercado_base, codigo_base, prob_base,
+                mercado_aprendido, codigo_aprendido, prob_aprendido,
+                ajuste_aplicado, placar_previsto, criado_em
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            str(game_id), str(esporte), str(liga_id), str(liga_nome), data_str,
+            str(home), str(away), float(forca_home), float(forca_away), float(home_adv),
+            str(contexto), str(mercado), str(codigo), float(prob_base),
+            str(mercado), str(codigo), float(prob_apr), float(ajuste),
+            str(placar), agora
+        ))
+    except Exception as e:
+        print(f"Erro ao salvar previsão: {str(e)}")
+        pass
 
 def registrar_feedback(game_id, codigo, acertou):
     if not codigo or not str(codigo).strip():
@@ -787,8 +794,8 @@ def card_moderno(titulo, corpo, tipo="info"):
     st.markdown(f"""
     <div class="card-modern">
         <span style="font-size: 1.4rem; margin-right: 0.5rem;">{emoji}</span>
-        <strong style="color: #818cf8; font-size: 1.1rem;">{titulo}</strong><br>
-        <span style="color: #cbd5e1; margin-top: 0.5rem; display: block;">{corpo}</span>
+        <strong style="color: #4f46e5; font-size: 1.1rem;">{titulo}</strong><br>
+        <span style="color: #0f172a; margin-top: 0.5rem; display: block;">{corpo}</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -801,7 +808,8 @@ def chips_prob(probs):
         elif prob >= 0.45: cls = "chip-yellow"
         else: cls = "chip-red"
         html.append(f'<span class="chip {cls}">{nome} · {pct(prob)}</span>')
-    st.markdown(" ".join(html), unsafe_allow_html=True)
+    if html:
+        st.markdown(" ".join(html), unsafe_allow_html=True)
 
 
 # ======================= TELAS =======================
@@ -905,9 +913,9 @@ def tela_futebol():
             with col1:
                 st.markdown(f"**{prev['home']}** vs **{prev['away']}**")
             with col2:
-                st.markdown(f"<span style='color: #818cf8; font-weight: 600;'>{prev['mercado_aprendido']}</span>", unsafe_allow_html=True)
+                st.markdown(f"<span style='color: #4f46e5; font-weight: 600;'>{prev['mercado_aprendido']}</span>", unsafe_allow_html=True)
             with col3:
-                st.markdown(f"<span style='color: #6ee7b7; font-weight: 700; font-size: 1.2rem;'>{pct(prev['prob_aprendido'])}</span>", unsafe_allow_html=True)
+                st.markdown(f"<span style='color: #059669; font-weight: 700; font-size: 1.2rem;'>{pct(prev['prob_aprendido'])}</span>", unsafe_allow_html=True)
             st.divider()
 
 
@@ -1005,9 +1013,9 @@ def main():
 
     st.sidebar.markdown("""
     <div style='text-align: center; padding: 1.5rem 0;'>
-        <h1 style='font-size: 1.8rem; margin: 0;'>⚽ PRO 18</h1>
-        <p style='color: #818cf8; margin-top: 0.5rem; font-size: 0.9rem;'>Analisador Esportivo</p>
-        <p style='color: #cbd5e1; font-size: 0.75rem; margin: 0.5rem 0 0 0;'>v1.0 • Inteligência Esportiva</p>
+        <h1 style='font-size: 1.8rem; margin: 0; color: #6366f1;'>⚽ PRO 18</h1>
+        <p style='color: #4f46e5; margin-top: 0.5rem; font-size: 0.9rem;'>Analisador Esportivo</p>
+        <p style='color: #6b7280; font-size: 0.75rem; margin: 0.5rem 0 0 0;'>v1.0 • Inteligência Esportiva</p>
     </div>
     """, unsafe_allow_html=True)
     
