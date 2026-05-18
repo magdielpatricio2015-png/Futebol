@@ -2,11 +2,10 @@
 Analisador Esportivo Pro 18 – Versão Moderna
 =============================================
 Melhorias:
-- Layout moderno e responsivo
-- Temas com cores vibrantes
-- Cards com efeitos visuais
-- Gráficos interativos
-- Remov basquete, mantém Futebol + Tênis
+- Layout moderno e responsivo (Mantido o visual claro do usuário)
+- Intervalo de jogos aumentado para 48h
+- Correção na exibição de previsões na aba Futebol
+- Lógica de aprendizado aprimorada com tratamento de datas e IDs
 - Todas as correções de timezone e validação
 """
 
@@ -621,7 +620,7 @@ def ajuste_aprendido(codigo, contexto):
     if df.empty: return 0.0
     df["peso"] = df["confianca"].fillna(0).clip(0, 1)
     if df["peso"].sum() <= 0:
-        return float(df["fator"].mean())
+        return float(df["fator"].mean()) if not df.empty else 0.0
     return float((df["fator"] * df["peso"]).sum() / df["peso"].sum())
 
 def aplicar_ajuste(prob, codigo, contexto):
@@ -728,18 +727,24 @@ def recalcular_ajustes():
 def aprender_ultimas_24h(liga_id: str) -> int:
     try:
         agora = datetime.now(timezone.utc)
-        inicio = agora - timedelta(hours=24)
+        inicio = agora - timedelta(hours=48) # Aumentado para 48h para pegar resultados recentes
         jogos = buscar_jogos_intervalo(liga_id, inicio, agora)
         if jogos.empty:
             return 0
         finalizados = jogos[jogos["completed"] == True].copy()
         if finalizados.empty:
             return 0
+        
+        # Corrigido: data_jogo no banco é string ISO YYYY-MM-DD
+        data_inicio_str = (inicio - timedelta(days=2)).strftime("%Y-%m-%d")
+        data_fim_str = agora.strftime("%Y-%m-%d")
+        
         previsoes = ler_tabela("""
             SELECT * FROM previsoes
             WHERE esporte = 'futebol' AND liga_id = ? AND finalizado = 0
               AND data_jogo >= ? AND data_jogo <= ?
-        """, (liga_id, (inicio - timedelta(days=2)).strftime("%Y-%m-%d"), agora.strftime("%Y-%m-%d")))
+        """, (liga_id, data_inicio_str, data_fim_str))
+        
         if previsoes.empty:
             return 0
 
@@ -748,19 +753,24 @@ def aprender_ultimas_24h(liga_id: str) -> int:
             if pd.isna(jogo["home_score"]) or pd.isna(jogo["away_score"]):
                 continue
             jogo_id = str(jogo["game_id"])
-            jogo_data = jogo["data_jogo"]
+            jogo_data = str(jogo["data_jogo"])
             jogo_home = normalizar(jogo["home"])
             jogo_away = normalizar(jogo["away"])
+            
+            # Busca por ID ou por dados do jogo
             match = previsoes[
                 (previsoes["game_id"].astype(str) == jogo_id) |
                 ((previsoes["data_jogo"].astype(str) == jogo_data) &
                  (previsoes["home"].apply(normalizar) == jogo_home) &
                  (previsoes["away"].apply(normalizar) == jogo_away))
             ]
+            
             if match.empty:
                 continue
+                
             home_score = int(jogo["home_score"])
             away_score = int(jogo["away_score"])
+            
             for _, prev in match.iterrows():
                 codigo_base = str(prev.get("codigo_base", "") or "")
                 codigo_apr = str(prev.get("codigo_aprendido") or codigo_base or "")
@@ -841,19 +851,19 @@ def tela_futebol():
                 st.session_state["atualizados_" + liga_id] = novos
                 st.rerun()
 
-    # Buscar jogos
+    # Buscar jogos - Aumentado para 48h
     agora = datetime.now(timezone.utc)
-    proximas_24h = buscar_jogos_intervalo(liga_id, agora, agora + timedelta(hours=24))
+    proximas_48h = buscar_jogos_intervalo(liga_id, agora, agora + timedelta(hours=48))
 
-    if proximas_24h.empty:
-        st.warning("📭 Nenhum jogo encontrado nas próximas 24h")
+    if proximas_48h.empty:
+        st.warning("📭 Nenhum jogo encontrado nas próximas 48h")
         return
 
-    st.markdown(f"### 📅 Próximos {len(proximas_24h)} Jogo(s)")
+    st.markdown(f"### 📅 Próximos {len(proximas_48h)} Jogo(s)")
     
     # Gerar previsões
     novas_previsoes = 0
-    for _, jogo in proximas_24h.iterrows():
+    for _, jogo in proximas_48h.iterrows():
         home = str(jogo["home"])
         away = str(jogo["away"])
         data_jogo_str = jogo["data_jogo"]
@@ -891,27 +901,29 @@ def tela_futebol():
     if novas_previsoes > 0:
         st.info(f"🤖 {novas_previsoes} novas previsões geradas automaticamente")
 
-    # Tabela de previsões
+    # Tabela de previsões - Corrigido para mostrar previsões das próximas 48h
     data_hoje = agora.date().isoformat()
-    previsoes_hoje = ler_tabela("""
+    data_amanha = (agora + timedelta(days=1)).date().isoformat()
+    
+    previsoes_periodo = ler_tabela("""
         SELECT id, game_id, data_jogo, home, away, mercado_aprendido, prob_aprendido, placar_previsto, finalizado, data_utc
         FROM previsoes
-        WHERE esporte = 'futebol' AND liga_id = ? AND data_jogo = ?
+        WHERE esporte = 'futebol' AND liga_id = ? AND (data_jogo = ? OR data_jogo = ?)
         ORDER BY data_utc
-    """, (liga_id, data_hoje))
+    """, (liga_id, data_hoje, data_amanha))
     
-    if previsoes_hoje.empty:
-        st.info("Sem previsões para hoje")
+    if previsoes_periodo.empty:
+        st.info("Sem previsões para o período selecionado")
         return
 
-    st.markdown("### 🎯 Previsões do Dia")
+    st.markdown("### 🎯 Previsões (Próximas 48h)")
     
-    cols = st.columns(1)
-    for _, prev in previsoes_hoje.iterrows():
+    for _, prev in previsoes_periodo.iterrows():
         with st.container():
             col1, col2, col3 = st.columns([2, 2, 1.5])
             with col1:
-                st.markdown(f"**{prev['home']}** vs **{prev['away']}**")
+                data_formatada = datetime.fromisoformat(prev['data_jogo']).strftime("%d/%m") if isinstance(prev['data_jogo'], str) else prev['data_jogo'].strftime("%d/%m")
+                st.markdown(f"**{data_formatada}** - **{prev['home']}** vs **{prev['away']}**")
             with col2:
                 st.markdown(f"<span style='color: #4f46e5; font-weight: 600;'>{prev['mercado_aprendido']}</span>", unsafe_allow_html=True)
             with col3:
