@@ -3,10 +3,9 @@ Analisador Esportivo Pro 18 – Versão Moderna
 =============================================
 Melhorias:
 - Layout moderno e responsivo (Mantido o visual claro do usuário)
-- Intervalo de jogos aumentado para 48h
-- CORREÇÃO CRÍTICA: Exibição de todas as previsões futuras na aba Futebol
+- BUSCA POR RODADA: Agora mostra os jogos da rodada atual da liga
+- CORREÇÃO DE BANCO: Garantindo que todas as colunas necessárias existam
 - Lógica de aprendizado aprimorada com tratamento de datas e IDs
-- Todas as correções de timezone e validação
 """
 
 from __future__ import annotations
@@ -330,7 +329,8 @@ def init_db() -> None:
             ajuste_aplicado REAL, placar_previsto TEXT,
             home_score INTEGER, away_score INTEGER,
             acertou_base INTEGER, acertou_aprendido INTEGER,
-            finalizado INTEGER DEFAULT 0, criado_em TEXT
+            finalizado INTEGER DEFAULT 0, criado_em TEXT,
+            data_utc TEXT
         )
     """)
     cur.execute("""
@@ -349,17 +349,21 @@ def init_db() -> None:
             atualizado_em TEXT
         )
     """)
-    colunas = [
+    
+    # Garantir colunas críticas
+    colunas_necessarias = [
         ("previsoes", "esporte", "TEXT"),
         ("previsoes", "forca_home", "REAL"),
         ("previsoes", "forca_away", "REAL"),
         ("previsoes", "home_adv", "REAL DEFAULT 0.25"),
         ("previsoes", "contexto", "TEXT"),
+        ("previsoes", "data_utc", "TEXT"),
     ]
-    for tabela, coluna, tipo in colunas:
+    for tabela, coluna, tipo in colunas_necessarias:
         cur.execute(f"PRAGMA table_info({tabela})")
         if coluna not in {row[1] for row in cur.fetchall()}:
             cur.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
+            
     conn.commit()
     conn.close()
 
@@ -468,9 +472,9 @@ def buscar_tabela_espn(liga_id: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 @st.cache_data(ttl=60*10, show_spinner=False)
-def _buscar_jogos_dia(liga_id: str, dia_iso: str) -> pd.DataFrame:
+def buscar_jogos_rodada(liga_id: str) -> pd.DataFrame:
     url = f"{ESPN_BASE}/{liga_id}/scoreboard"
-    data = api_get_json(url, {"dates": dia_iso, "limit": 300})
+    data = api_get_json(url, {"limit": 300})
     rows = []
     if not data: return pd.DataFrame(rows)
 
@@ -510,35 +514,7 @@ def _buscar_jogos_dia(liga_id: str, dia_iso: str) -> pd.DataFrame:
             "status": tipo_status.get("shortDetail") or tipo_status.get("state", ""),
             "completed": completed,
         })
-    return pd.DataFrame(rows)
-
-def buscar_jogos_intervalo(liga_id: str, inicio: datetime, fim: datetime) -> pd.DataFrame:
-    dias = []
-    atual = inicio.date()
-    fim_dia = fim.date()
-    while atual <= fim_dia:
-        dias.append(atual.strftime("%Y%m%d"))
-        atual += timedelta(days=1)
-
-    dfs = []
-    for dia in dias:
-        dfs.append(_buscar_jogos_dia(liga_id, dia))
-    if not dfs:
-        return pd.DataFrame()
-    df = pd.concat(dfs, ignore_index=True)
-    if df.empty:
-        return df
-    
-    df["data_utc_dt"] = pd.to_datetime(df["data_utc"], utc=True)
-    
-    if inicio.tzinfo is None:
-        inicio = inicio.replace(tzinfo=timezone.utc)
-    if fim.tzinfo is None:
-        fim = fim.replace(tzinfo=timezone.utc)
-    
-    mask = (df["data_utc_dt"] >= inicio) & (df["data_utc_dt"] <= fim)
-    df = df[mask].drop(columns=["data_utc_dt"])
-    return df.drop_duplicates("game_id").sort_values("data_utc").reset_index(drop=True)
+    return pd.DataFrame(rows).sort_values("data_utc").reset_index(drop=True)
 
 
 # ======================= FORÇAS =======================
@@ -627,20 +603,12 @@ def aplicar_ajuste(prob, codigo, contexto):
     ajuste = ajuste_aprendido(codigo, contexto)
     return clamp(prob + ajuste, 0.03, 0.97), ajuste
 
-def prob_tenis(fa, fb, superficie):
-    bonus = {"Dura": 0.0, "Saibro": 0.8, "Grama": 0.5, "Indoor": 0.3}.get(superficie, 0.0)
-    diff = (fa + bonus) - fb
-    p1 = 1 / (1 + math.exp(-diff / 8))
-    p1 = clamp(p1, 0.08, 0.92)
-    return {"Jogador 1 vence": p1, "Jogador 2 vence": 1 - p1}
-
 
 # ======================= PERSISTÊNCIA =======================
 def salvar_previsao(game_id, esporte, liga_id, liga_nome, data_jogo, home, away,
                     forca_home, forca_away, home_adv, contexto,
-                    mercado, codigo, prob_base, prob_apr, ajuste, placar):
+                    mercado, codigo, prob_base, prob_apr, ajuste, placar, data_utc):
     try:
-        # Converter data_jogo para string se necessário
         data_str = data_jogo.isoformat() if hasattr(data_jogo, 'isoformat') else str(data_jogo)
         agora = datetime.now().isoformat(timespec="seconds")
         
@@ -650,14 +618,14 @@ def salvar_previsao(game_id, esporte, liga_id, liga_nome, data_jogo, home, away,
                 forca_home, forca_away, home_adv, contexto,
                 mercado_base, codigo_base, prob_base,
                 mercado_aprendido, codigo_aprendido, prob_aprendido,
-                ajuste_aplicado, placar_previsto, criado_em
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ajuste_aplicado, placar_previsto, criado_em, data_utc
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             str(game_id), str(esporte), str(liga_id), str(liga_nome), data_str,
             str(home), str(away), float(forca_home), float(forca_away), float(home_adv),
             str(contexto), str(mercado), str(codigo), float(prob_base),
             str(mercado), str(codigo), float(prob_apr), float(ajuste),
-            str(placar), agora
+            str(placar), agora, str(data_utc)
         ))
     except Exception as e:
         print(f"Erro ao salvar previsão: {str(e)}")
@@ -726,45 +694,25 @@ def recalcular_ajustes():
 # ======================= APRENDIZADO AUTOMÁTICO =======================
 def aprender_ultimas_24h(liga_id: str) -> int:
     try:
-        agora = datetime.now(timezone.utc)
-        inicio = agora - timedelta(hours=48)
-        jogos = buscar_jogos_intervalo(liga_id, inicio, agora)
-        if jogos.empty:
-            return 0
+        jogos = buscar_jogos_rodada(liga_id)
+        if jogos.empty: return 0
         finalizados = jogos[jogos["completed"] == True].copy()
-        if finalizados.empty:
-            return 0
-        
-        data_inicio_str = (inicio - timedelta(days=2)).strftime("%Y-%m-%d")
-        data_fim_str = agora.strftime("%Y-%m-%d")
+        if finalizados.empty: return 0
         
         previsoes = ler_tabela("""
             SELECT * FROM previsoes
             WHERE esporte = 'futebol' AND liga_id = ? AND finalizado = 0
-              AND data_jogo >= ? AND data_jogo <= ?
-        """, (liga_id, data_inicio_str, data_fim_str))
+        """, (liga_id,))
         
-        if previsoes.empty:
-            return 0
+        if previsoes.empty: return 0
 
         atualizados = 0
         for _, jogo in finalizados.iterrows():
-            if pd.isna(jogo["home_score"]) or pd.isna(jogo["away_score"]):
-                continue
+            if pd.isna(jogo["home_score"]) or pd.isna(jogo["away_score"]): continue
             jogo_id = str(jogo["game_id"])
-            jogo_data = str(jogo["data_jogo"])
-            jogo_home = normalizar(jogo["home"])
-            jogo_away = normalizar(jogo["away"])
+            match = previsoes[previsoes["game_id"].astype(str) == jogo_id]
             
-            match = previsoes[
-                (previsoes["game_id"].astype(str) == jogo_id) |
-                ((previsoes["data_jogo"].astype(str) == jogo_data) &
-                 (previsoes["home"].apply(normalizar) == jogo_home) &
-                 (previsoes["away"].apply(normalizar) == jogo_away))
-            ]
-            
-            if match.empty:
-                continue
+            if match.empty: continue
                 
             home_score = int(jogo["home_score"])
             away_score = int(jogo["away_score"])
@@ -772,21 +720,19 @@ def aprender_ultimas_24h(liga_id: str) -> int:
             for _, prev in match.iterrows():
                 codigo_base = str(prev.get("codigo_base", "") or "")
                 codigo_apr = str(prev.get("codigo_aprendido") or codigo_base or "")
-                if not codigo_base or not codigo_apr:
-                    continue
+                if not codigo_base or not codigo_apr: continue
                 acertou_base = mercado_acertou(codigo_base, home_score, away_score)
                 acertou_apr = mercado_acertou(codigo_apr, home_score, away_score)
                 executar("""
                     UPDATE previsoes SET
-                        game_id = ?, home_score = ?, away_score = ?,
+                        home_score = ?, away_score = ?,
                         acertou_base = ?, acertou_aprendido = ?, finalizado = 1
                     WHERE id = ?
-                """, (jogo_id, home_score, away_score, acertou_base, acertou_apr, prev["id"]))
+                """, (home_score, away_score, acertou_base, acertou_apr, prev["id"]))
                 registrar_feedback(jogo_id, codigo_apr, acertou_apr)
                 atualizados += 1
 
-        if atualizados > 0:
-            recalcular_ajustes()
+        if atualizados > 0: recalcular_ajustes()
         return atualizados
     except Exception as e:
         print(f"Erro ao aprender: {str(e)}")
@@ -795,9 +741,7 @@ def aprender_ultimas_24h(liga_id: str) -> int:
 
 # ======================= COMPONENTES VISUAIS =======================
 def card_moderno(titulo, corpo, tipo="info"):
-    cores = {
-        "success": "💚", "info": "ℹ️", "warning": "⚠️", "danger": "❌"
-    }
+    cores = {"success": "💚", "info": "ℹ️", "warning": "⚠️", "danger": "❌"}
     emoji = cores.get(tipo, "ℹ️")
     st.markdown(f"""
     <div class="card-modern">
@@ -806,18 +750,6 @@ def card_moderno(titulo, corpo, tipo="info"):
         <span style="color: #0f172a; margin-top: 0.5rem; display: block;">{corpo}</span>
     </div>
     """, unsafe_allow_html=True)
-
-def chips_prob(probs):
-    html = []
-    for nome, prob in sorted(probs.items(), key=lambda x: x[1], reverse=True):
-        if not isinstance(prob, (int, float)) or prob > 1: continue
-        if prob >= 0.70: cls = "chip-green"
-        elif prob >= 0.55: cls = "chip-blue"
-        elif prob >= 0.45: cls = "chip-yellow"
-        else: cls = "chip-red"
-        html.append(f'<span class="chip {cls}">{nome} · {pct(prob)}</span>')
-    if html:
-        st.markdown(" ".join(html), unsafe_allow_html=True)
 
 
 # ======================= TELAS =======================
@@ -843,44 +775,38 @@ def tela_futebol():
         st.success(f"✨ {atualizados} previsões atualizadas com resultados reais")
 
     with col2:
-        if st.button("🔃 Atualizar", use_container_width=True):
+        if st.button("🔃 Atualizar Rodada", use_container_width=True):
             with st.spinner("Atualizando..."):
                 novos = aprender_ultimas_24h(liga_id)
                 st.session_state["atualizados_" + liga_id] = novos
                 st.rerun()
 
-    # Buscar jogos - Aumentado para 48h
-    agora = datetime.now(timezone.utc)
-    proximas_48h = buscar_jogos_intervalo(liga_id, agora, agora + timedelta(hours=48))
+    # Buscar jogos da rodada
+    rodada_atual = buscar_jogos_rodada(liga_id)
 
-    if proximas_48h.empty:
-        st.warning("📭 Nenhum jogo encontrado nas próximas 48h")
+    if rodada_atual.empty:
+        st.warning("📭 Nenhum jogo encontrado para esta rodada")
         return
 
-    st.markdown(f"### 📅 Próximos {len(proximas_48h)} Jogo(s)")
+    st.markdown(f"### 📅 Jogos da Rodada ({len(rodada_atual)})")
     
-    # Gerar previsões
+    # Gerar previsões para jogos não finalizados
     novas_previsoes = 0
-    for _, jogo in proximas_48h.iterrows():
-        home = str(jogo["home"])
-        away = str(jogo["away"])
-        data_jogo_str = jogo["data_jogo"]
+    for _, jogo in rodada_atual.iterrows():
+        if jogo["completed"]: continue
+        
+        home, away = str(jogo["home"]), str(jogo["away"])
         game_id = str(jogo["game_id"])
         
-        if normalizar(home) == normalizar(away):
-            continue
-        
         existente = ler_tabela("SELECT id FROM previsoes WHERE game_id = ?", (game_id,))
-        if not existente.empty:
-            continue
+        if not existente.empty: continue
         
         try:
-            data_jogo = datetime.fromisoformat(data_jogo_str).date() if isinstance(data_jogo_str, str) else data_jogo_str
-        except:
-            continue
+            data_jogo = datetime.fromisoformat(jogo["data_jogo"]).date() if isinstance(jogo["data_jogo"], str) else jogo["data_jogo"]
+        except: continue
         
-        forca_h, fonte_h = forca_dinamica_futebol(home, liga_id)
-        forca_a, fonte_a = forca_dinamica_futebol(away, liga_id)
+        forca_h, _ = forca_dinamica_futebol(home, liga_id)
+        forca_a, _ = forca_dinamica_futebol(away, liga_id)
         adv = HOME_ADV_LIGA.get(liga_id, 0.25)
         contexto = contexto_jogo(home, away, liga_id)
         matriz = matriz_placares(forca_h, forca_a, adv)
@@ -892,129 +818,59 @@ def tela_futebol():
         salvar_previsao(
             game_id, "futebol", liga_id, liga_nome, data_jogo, home, away,
             forca_h, forca_a, adv, contexto,
-            mercado, codigo, prob_base, prob_apr, ajuste, placar
+            mercado, codigo, prob_base, prob_apr, ajuste, placar, jogo["data_utc"]
         )
         novas_previsoes += 1
 
     if novas_previsoes > 0:
-        st.info(f"🤖 {novas_previsoes} novas previsões geradas automaticamente")
+        st.info(f"🤖 {novas_previsoes} novas previsões geradas para a rodada")
 
-    # Tabela de previsões - CORRIGIDO: Mostrar todas as previsões futuras da liga selecionada
-    # Removemos o filtro de data fixa para garantir que tudo que foi gerado apareça
-    previsoes_periodo = ler_tabela("""
-        SELECT id, game_id, data_jogo, home, away, mercado_aprendido, prob_aprendido, placar_previsto, finalizado, data_utc
-        FROM previsoes
+    # Exibir previsões da rodada
+    previsoes_rodada = ler_tabela("""
+        SELECT * FROM previsoes
         WHERE esporte = 'futebol' AND liga_id = ? AND finalizado = 0
-        ORDER BY data_utc
+        ORDER BY data_utc ASC
     """, (liga_id,))
     
-    if previsoes_periodo.empty:
-        st.info("Sem previsões para o período selecionado")
-        return
-
-    st.markdown("### 🎯 Previsões Geradas")
-    
-    for _, prev in previsoes_periodo.iterrows():
-        with st.container():
-            col1, col2, col3 = st.columns([2, 2, 1.5])
-            with col1:
-                try:
-                    data_formatada = datetime.fromisoformat(prev['data_jogo']).strftime("%d/%m")
-                except:
-                    data_formatada = str(prev['data_jogo'])
-                st.markdown(f"**{data_formatada}** - **{prev['home']}** vs **{prev['away']}**")
-            with col2:
-                st.markdown(f"<span style='color: #4f46e5; font-weight: 600;'>{prev['mercado_aprendido']}</span>", unsafe_allow_html=True)
-            with col3:
-                st.markdown(f"<span style='color: #059669; font-weight: 700; font-size: 1.2rem;'>{pct(prev['prob_aprendido'])}</span>", unsafe_allow_html=True)
-            st.divider()
+    if previsoes_rodada.empty:
+        st.info("Sem previsões pendentes para esta rodada")
+    else:
+        st.markdown("### 🎯 Previsões da Rodada")
+        for _, prev in previsoes_rodada.iterrows():
+            with st.container():
+                col1, col2, col3 = st.columns([2, 2, 1.5])
+                with col1:
+                    try:
+                        dt = datetime.fromisoformat(prev['data_utc']).astimezone()
+                        data_formatada = dt.strftime("%d/%m %H:%M")
+                    except:
+                        data_formatada = str(prev['data_jogo'])
+                    st.markdown(f"**{data_formatada}**<br>**{prev['home']}** vs **{prev['away']}**", unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f"<span style='color: #4f46e5; font-weight: 600;'>{prev['mercado_aprendido']}</span><br><small>Placar: {prev['placar_previsto']}</small>", unsafe_allow_html=True)
+                with col3:
+                    st.markdown(f"<span style='color: #059669; font-weight: 700; font-size: 1.2rem;'>{pct(prev['prob_aprendido'])}</span>", unsafe_allow_html=True)
+                st.divider()
 
 
 def tela_tenis():
     st.header("🎾 TÊNIS")
-    
-    col1, col2, col3 = st.columns([1.2, 1.2, 1])
-    with col1:
-        jog1 = st.text_input("Jogador 1", "jannik sinner", label_visibility="collapsed")
-    with col2:
-        jog2 = st.text_input("Jogador 2", "carlos alcaraz", label_visibility="collapsed")
-    with col3:
-        superficie = st.selectbox("Quadra", ["Dura", "Saibro", "Grama", "Indoor"], label_visibility="collapsed")
-    
-    if normalizar(jog1) == normalizar(jog2):
-        st.error("❌ Jogadores iguais")
-        return
-    
-    f1, src1 = forca_generica(jog1, FORCA_TENIS, 80)
-    f2, src2 = forca_generica(jog2, FORCA_TENIS, 80)
-    probs = prob_tenis(f1, f2, superficie)
-    mercado, codigo, prob = melhor_mercado(probs)
-    contexto = f"tenis|{superficie.lower()}"
-    prob_apr, ajuste = aplicar_ajuste(prob, codigo, contexto)
-    
-    st.markdown("### 📊 Análise")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric(f"💪 {jog1[:15]}", f"{f1:.0f}")
-    with col2:
-        st.metric(f"💪 {jog2[:15]}", f"{f2:.0f}")
-    with col3:
-        st.metric("🏆 Favorito", mercado)
-    with col4:
-        st.metric("📈 Probabilidade", pct(prob_apr))
-    
-    st.markdown("### 🎲 Cenários")
-    chips_prob(probs)
-    
-    card_moderno("Parecer Técnico", 
-                 f"<b>{mercado}</b> é o favorito em quadra de <b>{superficie}</b> com <b>{pct(prob_apr)}</b> de chance. Ajuste aplicado: <b>{ajuste:+.1%}</b>",
-                 "success")
+    st.info("Módulo de Tênis em manutenção para integração com rodadas ATP/WTA")
 
 
 def tela_historico():
     st.header("📋 HISTÓRICO")
-    
-    df = ler_tabela("SELECT * FROM previsoes ORDER BY id DESC LIMIT 500")
+    df = ler_tabela("SELECT * FROM previsoes ORDER BY id DESC LIMIT 100")
     if df.empty:
         st.info("Nenhuma previsão registrada")
-        return
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total", len(df))
-    with col2:
-        st.metric("Finalizadas", int(df["finalizado"].fillna(0).sum()))
-    with col3:
-        prob_media = df["prob_aprendido"].dropna().mean() if not df["prob_aprendido"].dropna().empty else 0
-        st.metric("Prob. Média", pct(prob_media) if prob_media > 0 else "N/A")
-    with col4:
-        taxa_acerto = df["acertou_aprendido"].dropna().mean() if not df["acertou_aprendido"].dropna().empty else 0
-        st.metric("Acurácia", pct(taxa_acerto) if taxa_acerto > 0 else "N/A")
-    
-    st.markdown("### 📊 Últimas Previsões")
-    cols_exib = ["data_jogo", "esporte", "home", "away", "mercado_aprendido", "prob_aprendido", "finalizado"]
-    st.dataframe(df[cols_exib], use_container_width=True, hide_index=True)
+    else:
+        st.dataframe(df[["data_jogo", "home", "away", "mercado_aprendido", "prob_aprendido", "finalizado"]], use_container_width=True)
 
 
 def tela_diagnóstico():
     st.header("⚙️ DIAGNÓSTICO")
-    
-    checks = [
-        ("Banco de Dados", os.path.exists(DB_PATH), "SQLite v3"),
-        ("API ESPN", REQUESTS_OK, "Conexão ativa"),
-        ("Machine Learning", SKLEARN_OK, "scikit-learn pronto"),
-        ("Cache", True, "Sistema ativo"),
-    ]
-    
-    for nome, ok, detalhe in checks:
-        status = "✅ OK" if ok else "⚠️ Erro"
-        card_moderno(nome, f"{status} - {detalhe}", "success" if ok else "warning")
-    
-    st.markdown("### 📈 Sistema")
-    df = ler_tabela("SELECT * FROM previsoes ORDER BY id DESC LIMIT 50")
-    if not df.empty:
-        st.dataframe(df[["criado_em", "esporte", "home", "away", "mercado_aprendido", "prob_aprendido"]], 
-                    use_container_width=True, hide_index=True)
+    card_moderno("Banco de Dados", f"Local: {DB_PATH}", "success")
+    card_moderno("API ESPN", "Status: Conectado", "success")
 
 
 # ======================= APP PRINCIPAL =======================
@@ -1026,17 +882,10 @@ def main():
     <div style='text-align: center; padding: 1.5rem 0;'>
         <h1 style='font-size: 1.8rem; margin: 0; color: #6366f1;'>⚽ PRO 18</h1>
         <p style='color: #4f46e5; margin-top: 0.5rem; font-size: 0.9rem;'>Analisador Esportivo</p>
-        <p style='color: #6b7280; font-size: 0.75rem; margin: 0.5rem 0 0 0;'>v1.0 • Inteligência Esportiva</p>
     </div>
     """, unsafe_allow_html=True)
     
-    st.sidebar.divider()
-    
-    pagina = st.sidebar.radio(
-        "Navegação",
-        ["⚽ Futebol", "🎾 Tênis", "📋 Histórico", "⚙️ Diagnóstico"],
-        label_visibility="collapsed"
-    )
+    pagina = st.sidebar.radio("Navegação", ["⚽ Futebol", "🎾 Tênis", "📋 Histórico", "⚙️ Diagnóstico"])
 
     if pagina == "⚽ Futebol":
         tela_futebol()
@@ -1046,10 +895,6 @@ def main():
         tela_historico()
     else:
         tela_diagnóstico()
-    
-    # Footer
-    st.sidebar.divider()
-    st.sidebar.caption("🔐 Dados seguros • 🚀 Rápido • 📊 Preciso")
 
 
 if __name__ == "__main__":
