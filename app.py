@@ -4,7 +4,7 @@ Analisador Esportivo Pro 18 – Versão Moderna
 Melhorias:
 - Layout moderno e responsivo (Mantido o visual claro do usuário)
 - Intervalo de jogos aumentado para 48h
-- Correção na exibição de previsões na aba Futebol
+- CORREÇÃO CRÍTICA: Exibição de todas as previsões futuras na aba Futebol
 - Lógica de aprendizado aprimorada com tratamento de datas e IDs
 - Todas as correções de timezone e validação
 """
@@ -727,7 +727,7 @@ def recalcular_ajustes():
 def aprender_ultimas_24h(liga_id: str) -> int:
     try:
         agora = datetime.now(timezone.utc)
-        inicio = agora - timedelta(hours=48) # Aumentado para 48h para pegar resultados recentes
+        inicio = agora - timedelta(hours=48)
         jogos = buscar_jogos_intervalo(liga_id, inicio, agora)
         if jogos.empty:
             return 0
@@ -735,7 +735,6 @@ def aprender_ultimas_24h(liga_id: str) -> int:
         if finalizados.empty:
             return 0
         
-        # Corrigido: data_jogo no banco é string ISO YYYY-MM-DD
         data_inicio_str = (inicio - timedelta(days=2)).strftime("%Y-%m-%d")
         data_fim_str = agora.strftime("%Y-%m-%d")
         
@@ -757,7 +756,6 @@ def aprender_ultimas_24h(liga_id: str) -> int:
             jogo_home = normalizar(jogo["home"])
             jogo_away = normalizar(jogo["away"])
             
-            # Busca por ID ou por dados do jogo
             match = previsoes[
                 (previsoes["game_id"].astype(str) == jogo_id) |
                 ((previsoes["data_jogo"].astype(str) == jogo_data) &
@@ -901,28 +899,29 @@ def tela_futebol():
     if novas_previsoes > 0:
         st.info(f"🤖 {novas_previsoes} novas previsões geradas automaticamente")
 
-    # Tabela de previsões - Corrigido para mostrar previsões das próximas 48h
-    data_hoje = agora.date().isoformat()
-    data_amanha = (agora + timedelta(days=1)).date().isoformat()
-    
+    # Tabela de previsões - CORRIGIDO: Mostrar todas as previsões futuras da liga selecionada
+    # Removemos o filtro de data fixa para garantir que tudo que foi gerado apareça
     previsoes_periodo = ler_tabela("""
         SELECT id, game_id, data_jogo, home, away, mercado_aprendido, prob_aprendido, placar_previsto, finalizado, data_utc
         FROM previsoes
-        WHERE esporte = 'futebol' AND liga_id = ? AND (data_jogo = ? OR data_jogo = ?)
+        WHERE esporte = 'futebol' AND liga_id = ? AND finalizado = 0
         ORDER BY data_utc
-    """, (liga_id, data_hoje, data_amanha))
+    """, (liga_id,))
     
     if previsoes_periodo.empty:
         st.info("Sem previsões para o período selecionado")
         return
 
-    st.markdown("### 🎯 Previsões (Próximas 48h)")
+    st.markdown("### 🎯 Previsões Geradas")
     
     for _, prev in previsoes_periodo.iterrows():
         with st.container():
             col1, col2, col3 = st.columns([2, 2, 1.5])
             with col1:
-                data_formatada = datetime.fromisoformat(prev['data_jogo']).strftime("%d/%m") if isinstance(prev['data_jogo'], str) else prev['data_jogo'].strftime("%d/%m")
+                try:
+                    data_formatada = datetime.fromisoformat(prev['data_jogo']).strftime("%d/%m")
+                except:
+                    data_formatada = str(prev['data_jogo'])
                 st.markdown(f"**{data_formatada}** - **{prev['home']}** vs **{prev['away']}**")
             with col2:
                 st.markdown(f"<span style='color: #4f46e5; font-weight: 600;'>{prev['mercado_aprendido']}</span>", unsafe_allow_html=True)
