@@ -367,6 +367,21 @@ def aplicar_estilo() -> None:
             color: #713f12;
             border-color: #fde047;
         }
+        .chip-purple {
+            background: #ede9fe;
+            color: #4c1d95;
+            border-color: #a78bfa;
+        }
+        .chip-orange {
+            background: #fff7ed;
+            color: #9a3412;
+            border-color: #fdba74;
+        }
+        .chip-teal {
+            background: #ccfbf1;
+            color: #134e4a;
+            border-color: #5eead4;
+        }
         button {
             border-radius: 8px !important;
             font-weight: 600 !important;
@@ -565,6 +580,167 @@ def safe_int(valor: Any) -> Optional[int]:
 
 def eh_copa_do_mundo(liga_id: str) -> bool:
     return liga_id == "fifa.world"
+
+
+def info_liga(liga_id: str) -> dict:
+    """Retorna metadados visuais e textuais de cada competição."""
+    mapa = {
+        "fifa.world": {
+            "emoji": "🏆",
+            "nome": "COPA DO MUNDO FIFA",
+            "subtitulo": "Análise por força das seleções · Sede neutra · Modelo Poisson + ML",
+            "header": "🌍 COPA DO MUNDO",
+            "banner_bg": "linear-gradient(135deg, #1a3a1a 0%, #2d6a2d 50%, #1a3a1a 100%)",
+            "banner_border": "#fde047",
+            "banner_titulo_cor": "#fde047",
+            "banner_sub_cor": "#bbf7d0",
+            "chip_classe": "chip-gold",
+            "chip_label": "🌍 Copa do Mundo",
+            "label_rodada": "🏆 Jogos da Copa do Mundo",
+            "aviso_vazio": "⚠️ Nenhum jogo da Copa do Mundo encontrado. A ESPN pode não ter dados fora do período da competição.",
+        },
+        "conmebol.libertadores": {
+            "emoji": "🏆",
+            "nome": "LIBERTADORES DA AMÉRICA",
+            "subtitulo": "Maior competição de clubes sul-americanos · Modelo Poisson + ML",
+            "header": "🌎 LIBERTADORES DA AMÉRICA",
+            "banner_bg": "linear-gradient(135deg, #1e1b4b 0%, #3730a3 50%, #1e1b4b 100%)",
+            "banner_border": "#a5b4fc",
+            "banner_titulo_cor": "#e0e7ff",
+            "banner_sub_cor": "#c7d2fe",
+            "chip_classe": "chip-purple",
+            "chip_label": "🌎 Libertadores",
+            "label_rodada": "🌎 Jogos da Libertadores",
+            "aviso_vazio": "⚠️ Nenhum jogo da Libertadores encontrado no momento.",
+        },
+        "conmebol.sudamericana": {
+            "emoji": "🥈",
+            "nome": "SUL-AMERICANA",
+            "subtitulo": "Segunda competição de clubes da CONMEBOL · Modelo Poisson + ML",
+            "header": "🌎 SUL-AMERICANA",
+            "banner_bg": "linear-gradient(135deg, #1c1917 0%, #b45309 50%, #1c1917 100%)",
+            "banner_border": "#fdba74",
+            "banner_titulo_cor": "#fed7aa",
+            "banner_sub_cor": "#fef3c7",
+            "chip_classe": "chip-orange",
+            "chip_label": "🌎 Sul-Americana",
+            "label_rodada": "🌎 Jogos da Sul-Americana",
+            "aviso_vazio": "⚠️ Nenhum jogo da Sul-Americana encontrado no momento.",
+        },
+        "uefa.champions": {
+            "emoji": "⭐",
+            "nome": "UEFA CHAMPIONS LEAGUE",
+            "subtitulo": "Elite do futebol europeu · Modelo Poisson + ML",
+            "header": "⭐ CHAMPIONS LEAGUE",
+            "banner_bg": "linear-gradient(135deg, #0c1445 0%, #1e3a8a 50%, #0c1445 100%)",
+            "banner_border": "#60a5fa",
+            "banner_titulo_cor": "#bfdbfe",
+            "banner_sub_cor": "#93c5fd",
+            "chip_classe": "chip-blue",
+            "chip_label": "⭐ Champions League",
+            "label_rodada": "⭐ Jogos da Champions",
+            "aviso_vazio": "⚠️ Nenhum jogo da Champions League encontrado no momento.",
+        },
+        "uefa.europa": {
+            "emoji": "🟠",
+            "nome": "UEFA EUROPA LEAGUE",
+            "subtitulo": "Segunda competição de clubes da UEFA · Modelo Poisson + ML",
+            "header": "🟠 EUROPA LEAGUE",
+            "banner_bg": "linear-gradient(135deg, #1c0a00 0%, #c2410c 50%, #1c0a00 100%)",
+            "banner_border": "#fb923c",
+            "banner_titulo_cor": "#fed7aa",
+            "banner_sub_cor": "#fef3c7",
+            "chip_classe": "chip-orange",
+            "chip_label": "🟠 Europa League",
+            "label_rodada": "🟠 Jogos da Europa League",
+            "aviso_vazio": "⚠️ Nenhum jogo da Europa League encontrado no momento.",
+        },
+        "bra.1": {
+            "emoji": "🇧🇷",
+            "nome": "BRASILEIRÃO SÉRIE A",
+            "subtitulo": "Primeira divisão do futebol brasileiro",
+            "header": "🇧🇷 BRASILEIRÃO SÉRIE A",
+            "banner_bg": "linear-gradient(135deg, #14532d 0%, #15803d 50%, #14532d 100%)",
+            "banner_border": "#4ade80",
+            "banner_titulo_cor": "#dcfce7",
+            "banner_sub_cor": "#bbf7d0",
+            "chip_classe": "chip-green",
+            "chip_label": "🇧🇷 Brasileirão A",
+            "label_rodada": "📅 Jogos da Rodada",
+            "aviso_vazio": "⚠️ Nenhum jogo encontrado para o Brasileirão no momento.",
+        },
+        "bra.2": {
+            "emoji": "🇧🇷",
+            "nome": "BRASILEIRÃO SÉRIE B",
+            "subtitulo": "Segunda divisão do futebol brasileiro",
+            "header": "🇧🇷 BRASILEIRÃO SÉRIE B",
+            "banner_bg": "linear-gradient(135deg, #1e3a5f 0%, #1d4ed8 50%, #1e3a5f 100%)",
+            "banner_border": "#60a5fa",
+            "banner_titulo_cor": "#dbeafe",
+            "banner_sub_cor": "#bfdbfe",
+            "chip_classe": "chip-blue",
+            "chip_label": "🇧🇷 Brasileirão B",
+            "label_rodada": "📅 Jogos da Rodada",
+            "aviso_vazio": "⚠️ Nenhum jogo encontrado para o Brasileirão B no momento.",
+        },
+        "bra.copa_do_brazil": {
+            "emoji": "🏅",
+            "nome": "COPA DO BRASIL",
+            "subtitulo": "Maior torneio mata-mata do futebol brasileiro",
+            "header": "🏅 COPA DO BRASIL",
+            "banner_bg": "linear-gradient(135deg, #1a2e05 0%, #365314 50%, #1a2e05 100%)",
+            "banner_border": "#a3e635",
+            "banner_titulo_cor": "#ecfccb",
+            "banner_sub_cor": "#d9f99d",
+            "chip_classe": "chip-teal",
+            "chip_label": "🏅 Copa do Brasil",
+            "label_rodada": "📅 Jogos da Copa do Brasil",
+            "aviso_vazio": "⚠️ Nenhum jogo da Copa do Brasil encontrado no momento.",
+        },
+        "eng.1": {
+            "emoji": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+            "nome": "PREMIER LEAGUE",
+            "subtitulo": "A liga mais assistida do mundo · Inglaterra",
+            "header": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 PREMIER LEAGUE",
+            "banner_bg": "linear-gradient(135deg, #1e0a3c 0%, #38003c 50%, #1e0a3c 100%)",
+            "banner_border": "#e0f0ff",
+            "banner_titulo_cor": "#e0f0ff",
+            "banner_sub_cor": "#c8e6ff",
+            "chip_classe": "chip-purple",
+            "chip_label": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League",
+            "label_rodada": "📅 Jogos da Rodada",
+            "aviso_vazio": "⚠️ Nenhum jogo da Premier League encontrado no momento.",
+        },
+        "esp.1": {
+            "emoji": "🇪🇸",
+            "nome": "LA LIGA",
+            "subtitulo": "Primeira divisão espanhola · Real Madrid, Barcelona e mais",
+            "header": "🇪🇸 LA LIGA",
+            "banner_bg": "linear-gradient(135deg, #7f1d1d 0%, #dc2626 50%, #7f1d1d 100%)",
+            "banner_border": "#fca5a5",
+            "banner_titulo_cor": "#fee2e2",
+            "banner_sub_cor": "#fecaca",
+            "chip_classe": "chip-red",
+            "chip_label": "🇪🇸 La Liga",
+            "label_rodada": "📅 Jogos da Rodada",
+            "aviso_vazio": "⚠️ Nenhum jogo de La Liga encontrado no momento.",
+        },
+    }
+    # Default genérico para ligas sem configuração específica
+    return mapa.get(liga_id, {
+        "emoji": "⚽",
+        "nome": liga_id.upper(),
+        "subtitulo": "Análise estatística Poisson + ML",
+        "header": "⚽ FUTEBOL COM APRENDIZADO",
+        "banner_bg": "linear-gradient(135deg, #1e293b 0%, #334155 50%, #1e293b 100%)",
+        "banner_border": "#94a3b8",
+        "banner_titulo_cor": "#e2e8f0",
+        "banner_sub_cor": "#cbd5e1",
+        "chip_classe": "chip-gray",
+        "chip_label": "⚽ Futebol",
+        "label_rodada": "📅 Jogos da Rodada",
+        "aviso_vazio": "⚠️ Nenhum jogo encontrado para esta liga no momento.",
+    })
 
 
 # ======================= AVALIAÇÃO DE ACERTOS =======================
@@ -1320,36 +1496,33 @@ def tela_futebol() -> None:
     liga_nome = st.selectbox("Escolha a Liga / Competição", list(LIGAS.keys()))
     liga_id = LIGAS[liga_nome]
 
-    # Banner especial Copa do Mundo
-    if eh_copa_do_mundo(liga_id):
-        st.markdown(
-            """
-            <div style="
-                background: linear-gradient(135deg, #1a3a1a 0%, #2d6a2d 50%, #1a3a1a 100%);
-                border-radius: 12px;
-                padding: 1rem 1.5rem;
-                margin-bottom: 1rem;
-                border: 2px solid #fde047;
-                display: flex;
-                align-items: center;
-                gap: 1rem;
-            ">
-                <span style="font-size: 2.5rem;">🏆</span>
-                <div>
-                    <span style="color: #fde047; font-size: 1.3rem; font-weight: 800;">
-                        COPA DO MUNDO FIFA
-                    </span><br>
-                    <span style="color: #bbf7d0; font-size: 0.85rem;">
-                        Análise por força das seleções · Sede neutra · Modelo Poisson + ML
-                    </span>
-                </div>
+    meta = info_liga(liga_id)
+    st.markdown(
+        f"""
+        <div style="
+            background: {meta['banner_bg']};
+            border-radius: 12px;
+            padding: 1rem 1.5rem;
+            margin-bottom: 1rem;
+            border: 2px solid {meta['banner_border']};
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        ">
+            <span style="font-size: 2.5rem;">{meta['emoji']}</span>
+            <div>
+                <span style="color: {meta['banner_titulo_cor']}; font-size: 1.3rem; font-weight: 800;">
+                    {meta['nome']}
+                </span><br>
+                <span style="color: {meta['banner_sub_cor']}; font-size: 0.85rem;">
+                    {meta['subtitulo']}
+                </span>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.header("🌍 COPA DO MUNDO")
-    else:
-        st.header("⚽ FUTEBOL COM APRENDIZADO")
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.header(meta["header"])
 
     atualizados_auto = auto_atualizar_resultados(liga_id)
 
@@ -1400,17 +1573,10 @@ def tela_futebol() -> None:
     df_rodada = buscar_jogos_rodada(liga_id)
 
     if df_rodada.empty:
-        if eh_copa_do_mundo(liga_id):
-            st.warning(
-                "⚠️ Nenhum jogo da Copa do Mundo encontrado no momento. "
-                "A ESPN pode não ter dados disponíveis fora do período da competição."
-            )
-        else:
-            st.warning("Nenhum jogo encontrado para esta liga no momento.")
+        st.warning(meta["aviso_vazio"])
         return
 
-    label_rodada = "🏆 Jogos da Copa do Mundo" if eh_copa_do_mundo(liga_id) else "📅 Jogos da Rodada"
-    st.markdown(f"### {label_rodada} ({len(df_rodada)})")
+    st.markdown(f"### {meta['label_rodada']} ({len(df_rodada)})")
 
     prev_por_game = carregar_previsoes_da_rodada(df_rodada)
 
@@ -1427,20 +1593,12 @@ def tela_futebol() -> None:
             col1, col2, col3 = st.columns([2, 2, 1.5])
 
             with col1:
-                # Copa do Mundo: exibe bandeira (chip dourado) ao lado dos times
-                if eh_copa_do_mundo(liga_id):
-                    st.markdown(
-                        f"**{esc(jogo['data_local'])}**<br>"
-                        f"<span class='chip chip-gold'>🌍 Copa do Mundo</span><br>"
-                        f"🔵 **{esc(jogo['home'])}** vs 🔴 **{esc(jogo['away'])}**",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(
-                        f"**{esc(jogo['data_local'])}**<br>"
-                        f"**{esc(jogo['home'])}** vs **{esc(jogo['away'])}**",
-                        unsafe_allow_html=True,
-                    )
+                st.markdown(
+                    f"**{esc(jogo['data_local'])}**<br>"
+                    f"<span class='chip {meta['chip_classe']}'>{meta['chip_label']}</span><br>"
+                    f"🔵 **{esc(jogo['home'])}** vs 🔴 **{esc(jogo['away'])}**",
+                    unsafe_allow_html=True,
+                )
 
                 if bool(jogo["completed"]):
                     st.markdown(
@@ -1474,7 +1632,7 @@ def tela_futebol() -> None:
                         fh = float(prev.get("forca_home", 0))
                         fa = float(prev.get("forca_away", 0))
                         st.markdown(
-                            f"<span class='chip chip-gold'>🏅 Força: {fh:.0f} × {fa:.0f}</span>",
+                            f"<span class='chip {meta['chip_classe']}'>🏅 Força: {fh:.0f} × {fa:.0f}</span>",
                             unsafe_allow_html=True,
                         )
                     except Exception:
@@ -1659,7 +1817,7 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    st.sidebar.caption("v2.2 • Copa do Mundo + Métricas base vs aprendida")
+    st.sidebar.caption("v2.3 • Banners dinâmicos por competição + Libertadores")
 
     pg = st.sidebar.radio(
         "Navegação",
