@@ -12,6 +12,7 @@ Versão revisada com:
 - Tratamento melhor de erros HTTP.
 - Datas salvas em UTC.
 - Persistência segura com UPSERT, sem apagar dados antigos.
+- Copa do Mundo adicionada (fifa.world).
 """
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ st.set_page_config(
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="expanded",
-    menu_items={"About": "Analisador Esportivo Pro 18 - v2.1"},
+    menu_items={"About": "Analisador Esportivo Pro 18 - v2.2"},
 )
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
@@ -85,9 +86,12 @@ HOME_ADV_LIGA = {
     "uefa.europa": 0.18,
     "conmebol.libertadores": 0.30,
     "conmebol.sudamericana": 0.28,
+    # Copa do Mundo: sede neutra (exceto país-sede), vantagem mínima
+    "fifa.world": 0.08,
 }
 
 LIGAS = {
+    "🌍 Copa do Mundo": "fifa.world",
     "Brasileirão Série A": "bra.1",
     "Brasileirão Série B": "bra.2",
     "Copa do Brasil": "bra.copa_do_brazil",
@@ -103,6 +107,65 @@ LIGAS = {
 }
 
 FORCA_BASE = {
+    # ===== SELEÇÕES – Copa do Mundo =====
+    "brasil": 88,
+    "argentina": 91,
+    "franca": 90,
+    "england": 85,
+    "espanha": 88,
+    "alemanha": 85,
+    "portugal": 86,
+    "holanda": 84,
+    "belgica": 82,
+    "croacia": 82,
+    "uruguai": 81,
+    "colombia": 80,
+    "mexico": 79,
+    "estados unidos": 78,
+    "canada": 77,
+    "australia": 76,
+    "japao": 79,
+    "coreia do sul": 78,
+    "marrocos": 80,
+    "senegal": 79,
+    "nigeria": 77,
+    "egito": 76,
+    "camaroes": 75,
+    "ghana": 75,
+    "tunisia": 74,
+    "africa do sul": 73,
+    "costa do marfim": 77,
+    "mali": 74,
+    "suica": 80,
+    "austria": 79,
+    "dinamarca": 81,
+    "suecia": 79,
+    "noruega": 80,
+    "polonia": 78,
+    "czechia": 77,
+    "eslovaquia": 75,
+    "hungria": 75,
+    "escocia": 76,
+    "gales": 75,
+    "turquia": 78,
+    "ukraine": 77,
+    "serbia": 77,
+    "albania": 74,
+    "iran": 75,
+    "arabia saudita": 73,
+    "qatar": 71,
+    "equador": 75,
+    "chile": 76,
+    "peru": 74,
+    "venezuela": 72,
+    "bolivia": 68,
+    "paraguai": 71,
+    "costa rica": 73,
+    "panama": 70,
+    "honduras": 69,
+    "jamaica": 69,
+    "nova zelandia": 68,
+    # ===== CLUBES – Brasil =====
     "flamengo": 86,
     "palmeiras": 84,
     "botafogo": 79,
@@ -146,6 +209,7 @@ FORCA_BASE = {
     "volta redonda": 62,
     "santa cruz": 61,
     "retro": 61,
+    # ===== CLUBES – Europa =====
     "manchester city": 91,
     "arsenal": 88,
     "liverpool": 88,
@@ -165,6 +229,59 @@ FORCA_BASE = {
 }
 
 ALIASES = {
+    # ===== Seleções =====
+    "brazil": "brasil",
+    "brazil national team": "brasil",
+    "brazil (w)": "brasil",
+    "selecao brasileira": "brasil",
+    "argentina national team": "argentina",
+    "france": "franca",
+    "france national team": "franca",
+    "england national team": "england",
+    "spain": "espanha",
+    "spain national team": "espanha",
+    "germany": "alemanha",
+    "germany national team": "alemanha",
+    "portugal national team": "portugal",
+    "netherlands": "holanda",
+    "holland": "holanda",
+    "nederland": "holanda",
+    "belgium": "belgica",
+    "croatia": "croacia",
+    "uruguay": "uruguai",
+    "colombia": "colombia",
+    "japan": "japao",
+    "south korea": "coreia do sul",
+    "korea republic": "coreia do sul",
+    "morocco": "marrocos",
+    "switzerland": "suica",
+    "denmark": "dinamarca",
+    "sweden": "suecia",
+    "norway": "noruega",
+    "poland": "polonia",
+    "czech republic": "czechia",
+    "slovakia": "eslovaquia",
+    "hungary": "hungria",
+    "scotland": "escocia",
+    "wales": "gales",
+    "turkey": "turquia",
+    "ukraine": "ukraine",
+    "ecuador": "equador",
+    "chile": "chile",
+    "peru": "peru",
+    "bolivia": "bolivia",
+    "paraguay": "paraguai",
+    "costa rica": "costa rica",
+    "usa": "estados unidos",
+    "united states": "estados unidos",
+    "new zealand": "nova zelandia",
+    "ivory coast": "costa do marfim",
+    "cote d'ivoire": "costa do marfim",
+    "iran (islamic republic)": "iran",
+    "saudi arabia": "arabia saudita",
+    "south africa": "africa do sul",
+    "ghana": "ghana",
+    # ===== Clubes =====
     "man city": "manchester city",
     "man utd": "manchester united",
     "man united": "manchester united",
@@ -244,6 +361,11 @@ def aplicar_estilo() -> None:
             background: #f1f5f9;
             color: #475569;
             border-color: #cbd5e1;
+        }
+        .chip-gold {
+            background: #fef9c3;
+            color: #713f12;
+            border-color: #fde047;
         }
         button {
             border-radius: 8px !important;
@@ -439,6 +561,10 @@ def safe_int(valor: Any) -> Optional[int]:
         return int(float(texto))
     except Exception:
         return None
+
+
+def eh_copa_do_mundo(liga_id: str) -> bool:
+    return liga_id == "fifa.world"
 
 
 # ======================= AVALIAÇÃO DE ACERTOS =======================
@@ -700,6 +826,9 @@ def analisar_jogo(home: str, away: str, liga_id: str, model=None, scaler=None):
     fa = float(FORCA_BASE.get(na, 70.0))
 
     adv = float(HOME_ADV_LIGA.get(liga_id, 0.25))
+
+    # Na Copa do Mundo, o "home_adv" é mínimo pois os jogos são em sede neutra.
+    # Usamos diff pura de força das seleções.
     diff = (fh + adv * 10) - fa
 
     lh = max(1.28 + diff / 34, 0.2)
@@ -762,12 +891,16 @@ def analisar_jogo(home: str, away: str, liga_id: str, model=None, scaler=None):
         codigo_aprendido = codigo_base
         prob_aprendido = prob_base
 
-    base_esc = 9.5
-    base_cart = 4.2
-
-    if "bra" in liga_id or "conmebol" in liga_id:
-        base_cart += 1.2
-        base_esc += 0.5
+    # Escanteios e cartões: Copa do Mundo tem padrão ligeiramente diferente
+    if eh_copa_do_mundo(liga_id):
+        base_esc = 9.8   # Copa do Mundo tende a ter mais escanteios em jogos acirrados
+        base_cart = 3.8  # Cartões um pouco menos frequentes no nível mundial
+    elif "bra" in liga_id or "conmebol" in liga_id:
+        base_esc = 10.0
+        base_cart = 5.4
+    else:
+        base_esc = 9.5
+        base_cart = 4.2
 
     escanteios = max(5.0, base_esc + (fh + fa - 140) / 20)
     cartoes = max(1.0, base_cart + (160 - fh - fa) / 30)
@@ -1184,10 +1317,39 @@ def salvar_e_ler_previsao(
 
 # ======================= TELAS =======================
 def tela_futebol() -> None:
-    st.header("⚽ FUTEBOL COM APRENDIZADO")
-
-    liga_nome = st.selectbox("Escolha a Liga", list(LIGAS.keys()))
+    liga_nome = st.selectbox("Escolha a Liga / Competição", list(LIGAS.keys()))
     liga_id = LIGAS[liga_nome]
+
+    # Banner especial Copa do Mundo
+    if eh_copa_do_mundo(liga_id):
+        st.markdown(
+            """
+            <div style="
+                background: linear-gradient(135deg, #1a3a1a 0%, #2d6a2d 50%, #1a3a1a 100%);
+                border-radius: 12px;
+                padding: 1rem 1.5rem;
+                margin-bottom: 1rem;
+                border: 2px solid #fde047;
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+            ">
+                <span style="font-size: 2.5rem;">🏆</span>
+                <div>
+                    <span style="color: #fde047; font-size: 1.3rem; font-weight: 800;">
+                        COPA DO MUNDO FIFA
+                    </span><br>
+                    <span style="color: #bbf7d0; font-size: 0.85rem;">
+                        Análise por força das seleções · Sede neutra · Modelo Poisson + ML
+                    </span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.header("🌍 COPA DO MUNDO")
+    else:
+        st.header("⚽ FUTEBOL COM APRENDIZADO")
 
     atualizados_auto = auto_atualizar_resultados(liga_id)
 
@@ -1238,10 +1400,17 @@ def tela_futebol() -> None:
     df_rodada = buscar_jogos_rodada(liga_id)
 
     if df_rodada.empty:
-        st.warning("Nenhum jogo encontrado para esta liga no momento.")
+        if eh_copa_do_mundo(liga_id):
+            st.warning(
+                "⚠️ Nenhum jogo da Copa do Mundo encontrado no momento. "
+                "A ESPN pode não ter dados disponíveis fora do período da competição."
+            )
+        else:
+            st.warning("Nenhum jogo encontrado para esta liga no momento.")
         return
 
-    st.markdown(f"### 📅 Jogos da Rodada ({len(df_rodada)})")
+    label_rodada = "🏆 Jogos da Copa do Mundo" if eh_copa_do_mundo(liga_id) else "📅 Jogos da Rodada"
+    st.markdown(f"### {label_rodada} ({len(df_rodada)})")
 
     prev_por_game = carregar_previsoes_da_rodada(df_rodada)
 
@@ -1258,11 +1427,20 @@ def tela_futebol() -> None:
             col1, col2, col3 = st.columns([2, 2, 1.5])
 
             with col1:
-                st.markdown(
-                    f"**{esc(jogo['data_local'])}**<br>"
-                    f"**{esc(jogo['home'])}** vs **{esc(jogo['away'])}**",
-                    unsafe_allow_html=True,
-                )
+                # Copa do Mundo: exibe bandeira (chip dourado) ao lado dos times
+                if eh_copa_do_mundo(liga_id):
+                    st.markdown(
+                        f"**{esc(jogo['data_local'])}**<br>"
+                        f"<span class='chip chip-gold'>🌍 Copa do Mundo</span><br>"
+                        f"🔵 **{esc(jogo['home'])}** vs 🔴 **{esc(jogo['away'])}**",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f"**{esc(jogo['data_local'])}**<br>"
+                        f"**{esc(jogo['home'])}** vs **{esc(jogo['away'])}**",
+                        unsafe_allow_html=True,
+                    )
 
                 if bool(jogo["completed"]):
                     st.markdown(
@@ -1290,6 +1468,17 @@ def tela_futebol() -> None:
                     f"🚩 Escanteios: **{esc(prev.get('escanteios_previstos', '-'))}** "
                     f"| 🟨 Cartões: **{esc(prev.get('cartoes_previstos', '-'))}**"
                 )
+
+                if eh_copa_do_mundo(liga_id):
+                    try:
+                        fh = float(prev.get("forca_home", 0))
+                        fa = float(prev.get("forca_away", 0))
+                        st.markdown(
+                            f"<span class='chip chip-gold'>🏅 Força: {fh:.0f} × {fa:.0f}</span>",
+                            unsafe_allow_html=True,
+                        )
+                    except Exception:
+                        pass
 
                 if int(prev.get("finalizado") or 0) == 1:
                     acertou = prev.get("acertou_aprendido")
@@ -1328,12 +1517,13 @@ def tela_futebol() -> None:
                 else:
                     st.caption("Confiança base")
 
-                try:
-                    fh = float(prev.get("forca_home", 0))
-                    fa = float(prev.get("forca_away", 0))
-                    st.caption(f"Forças: casa {fh:.0f} | fora {fa:.0f}")
-                except Exception:
-                    pass
+                if not eh_copa_do_mundo(liga_id):
+                    try:
+                        fh = float(prev.get("forca_home", 0))
+                        fa = float(prev.get("forca_away", 0))
+                        st.caption(f"Forças: casa {fh:.0f} | fora {fa:.0f}")
+                    except Exception:
+                        pass
 
 
 def tela_historico() -> None:
@@ -1469,7 +1659,7 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    st.sidebar.caption("v2.1 • Métricas base vs aprendida")
+    st.sidebar.caption("v2.2 • Copa do Mundo + Métricas base vs aprendida")
 
     pg = st.sidebar.radio(
         "Navegação",
