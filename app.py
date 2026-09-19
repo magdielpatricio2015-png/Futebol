@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from math import exp, factorial
 from difflib import get_close_matches
 import unicodedata
@@ -18,8 +19,9 @@ st.set_page_config(
     layout="wide",
 )
 
-FUSO_HORARIO = "America/Sao_Paulo"
-URL_ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+FUSO = ZoneInfo("America/Sao_Paulo")
+ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+
 
 LIGAS = {
     "Brasil - Série A": "bra.1",
@@ -29,14 +31,18 @@ LIGAS = {
     "Premier League": "eng.1",
     "Champions League": "uefa.champions",
     "Europa League": "uefa.europa",
+    "Conference League": "uefa.europa.conf",
     "La Liga": "esp.1",
     "Serie A Italiana": "ita.1",
     "Bundesliga": "ger.1",
     "Ligue 1": "fra.1",
     "Primeira Liga": "por.1",
+    "Eredivisie": "ned.1",
     "MLS": "usa.1",
     "Liga MX": "mex.1",
+    "Liga Saudita": "ksa.1",
 }
+
 
 RATINGS = {
     "flamengo": 87.5,
@@ -58,13 +64,17 @@ RATINGS = {
     "ceara": 76.0,
     "vitoria": 75.5,
     "juventude": 75.0,
-    "sport": 74.0,
+    "sport recife": 74.0,
+    "mirassol": 74.5,
+
     "river plate": 84.0,
     "boca juniors": 83.0,
-    "racing": 80.0,
+    "racing club": 80.0,
+    "independiente": 78.5,
     "nacional": 78.0,
     "penarol": 78.0,
     "colo colo": 77.0,
+
     "manchester city": 94.0,
     "arsenal": 91.0,
     "liverpool": 91.5,
@@ -75,6 +85,7 @@ RATINGS = {
     "aston villa": 84.0,
     "brighton": 82.0,
     "west ham": 80.0,
+
     "real madrid": 94.0,
     "barcelona": 91.0,
     "atletico madrid": 88.0,
@@ -83,6 +94,7 @@ RATINGS = {
     "villarreal": 82.0,
     "sevilla": 80.0,
     "real betis": 81.0,
+
     "inter": 90.5,
     "internazionale": 90.5,
     "milan": 87.5,
@@ -92,11 +104,13 @@ RATINGS = {
     "atalanta": 86.0,
     "roma": 84.0,
     "lazio": 83.0,
+
     "bayern": 92.0,
     "bayern munich": 92.0,
     "borussia dortmund": 87.5,
     "bayer leverkusen": 90.0,
     "rb leipzig": 86.5,
+
     "psg": 91.0,
     "paris saint germain": 91.0,
     "marseille": 83.0,
@@ -108,6 +122,7 @@ RATINGS = {
     "ajax": 81.0,
     "psv": 84.0,
     "feyenoord": 83.0,
+
     "brasil": 91.0,
     "argentina": 91.5,
     "franca": 91.0,
@@ -121,6 +136,7 @@ RATINGS = {
     "mexico": 81.0,
     "japao": 80.0,
 }
+
 
 ALIASES = {
     "mengao": "flamengo",
@@ -156,26 +172,29 @@ def porcentagem(valor):
     return f"{valor * 100:.1f}%"
 
 
+def limitar(valor, minimo, maximo):
+    return max(minimo, min(valor, maximo))
+
+
 def poisson(quantidade, media):
     return exp(-media) * (media ** quantidade) / factorial(quantidade)
 
 
-def rating_time(nome):
-    nome_original = nome.strip()
-    nome_normalizado = normalizar(nome_original)
+def obter_rating(nome):
+    nome = normalizar(nome)
 
-    if nome_normalizado in ALIASES:
-        nome_normalizado = ALIASES[nome_normalizado]
+    if nome in ALIASES:
+        nome = ALIASES[nome]
 
-    if nome_normalizado in RATINGS:
-        return RATINGS[nome_normalizado]
+    if nome in RATINGS:
+        return RATINGS[nome]
 
     for time, rating in RATINGS.items():
-        if nome_normalizado in time or time in nome_normalizado:
+        if nome in time or time in nome:
             return rating
 
     semelhantes = get_close_matches(
-        nome_normalizado,
+        nome,
         RATINGS.keys(),
         n=1,
         cutoff=0.70,
@@ -188,35 +207,38 @@ def rating_time(nome):
 
 
 # ============================================================
-# PREVISÃO ESTATÍSTICA
+# PREVISÃO DE PLACAR, GOLS E ESCANTEIOS
 # ============================================================
 
 def calcular_previsao(mandante, visitante):
-    rating_mandante = rating_time(mandante)
-    rating_visitante = rating_time(visitante)
+    rating_casa = obter_rating(mandante)
+    rating_fora = obter_rating(visitante)
 
-    diferenca = rating_mandante - rating_visitante
+    diferenca = rating_casa - rating_fora
 
-    gols_mandante = max(
+    gols_casa = limitar(
+        1.38 + diferenca * 0.018,
         0.20,
-        min(3.80, 1.38 + diferenca * 0.018),
+        3.80,
     )
 
-    gols_visitante = max(
+    gols_fora = limitar(
+        1.08 - diferenca * 0.012,
         0.20,
-        min(3.50, 1.08 - diferenca * 0.012),
+        3.50,
     )
 
     matriz = []
 
-    for gols_casa in range(9):
+    for casa in range(9):
         linha = []
 
-        for gols_fora in range(9):
+        for fora in range(9):
             probabilidade = (
-                poisson(gols_casa, gols_mandante)
-                * poisson(gols_fora, gols_visitante)
+                poisson(casa, gols_casa)
+                * poisson(fora, gols_fora)
             )
+
             linha.append(probabilidade)
 
         matriz.append(linha)
@@ -232,45 +254,44 @@ def calcular_previsao(mandante, visitante):
     for casa in range(9):
         for fora in range(9):
             placares.append({
-                "placar": f"{casa} x {fora}",
-                "probabilidade": matriz[casa][fora],
+                "Placar": f"{casa} x {fora}",
+                "Probabilidade": matriz[casa][fora],
             })
 
     placares.sort(
-        key=lambda item: item["probabilidade"],
+        key=lambda item: item["Probabilidade"],
         reverse=True,
     )
 
-    prob_vitoria_casa = 0
-    prob_empate = 0
-    prob_vitoria_fora = 0
-    prob_over_25 = 0
-    prob_ambas_marcam = 0
+    vitoria_casa = 0
+    empate = 0
+    vitoria_fora = 0
+    over_25 = 0
+    ambas_marcam = 0
 
     for casa in range(9):
         for fora in range(9):
             probabilidade = matriz[casa][fora]
 
             if casa > fora:
-                prob_vitoria_casa += probabilidade
+                vitoria_casa += probabilidade
+
             elif casa == fora:
-                prob_empate += probabilidade
+                empate += probabilidade
+
             else:
-                prob_vitoria_fora += probabilidade
+                vitoria_fora += probabilidade
 
             if casa + fora >= 3:
-                prob_over_25 += probabilidade
+                over_25 += probabilidade
 
             if casa >= 1 and fora >= 1:
-                prob_ambas_marcam += probabilidade
+                ambas_marcam += probabilidade
 
-    media_escanteios = max(
+    media_escanteios = limitar(
+        9.4 + ((rating_casa + rating_fora - 150) * 0.025),
         6.0,
-        min(
-            14.0,
-            9.4
-            + ((rating_mandante + rating_visitante - 150) * 0.025),
-        ),
+        14.0,
     )
 
     linhas_escanteios = {}
@@ -288,42 +309,31 @@ def calcular_previsao(mandante, visitante):
         linhas_escanteios[linha] = probabilidade
 
     return {
-        "gols_mandante": gols_mandante,
-        "gols_visitante": gols_visitante,
-        "total_gols": gols_mandante + gols_visitante,
+        "gols_casa": gols_casa,
+        "gols_fora": gols_fora,
+        "total_gols": gols_casa + gols_fora,
         "placares": placares[:10],
-        "vitoria_casa": prob_vitoria_casa,
-        "empate": prob_empate,
-        "vitoria_fora": prob_vitoria_fora,
-        "over_25": prob_over_25,
-        "under_25": 1 - prob_over_25,
-        "ambas_marcam": prob_ambas_marcam,
+        "vitoria_casa": vitoria_casa,
+        "empate": empate,
+        "vitoria_fora": vitoria_fora,
+        "over_25": over_25,
+        "under_25": 1 - over_25,
+        "ambas_marcam": ambas_marcam,
         "media_escanteios": media_escanteios,
         "linhas_escanteios": linhas_escanteios,
     }
 
 
 # ============================================================
-# ESPN - BUSCA DE JOGOS
+# BUSCA DA ESPN
 # ============================================================
 
 @st.cache_data(ttl=900)
-def buscar_jogos(slug, dias):
-    agora = datetime.now()
-    final = agora + timedelta(days=dias)
-
-    data_inicio = agora.strftime("%Y%m%d")
-    data_final = final.strftime("%Y%m%d")
-
-    if data_inicio == data_final:
-        datas = data_inicio
-    else:
-        datas = f"{data_inicio}-{data_final}"
-
-    url = f"{URL_ESPN}/{slug}/scoreboard"
+def buscar_jogos_por_dia(slug, data):
+    url = f"{ESPN_BASE}/{slug}/scoreboard"
 
     parametros = {
-        "dates": datas,
+        "dates": data,
         "limit": 100,
         "region": "br",
         "lang": "pt",
@@ -335,12 +345,17 @@ def buscar_jogos(slug, dias):
         timeout=20,
         headers={
             "User-Agent": "Mozilla/5.0 Previsor Futebol",
+            "Accept": "application/json",
         },
     )
 
     resposta.raise_for_status()
 
-    dados = resposta.json()
+    return resposta.json()
+
+
+def extrair_jogos(slug, nome_liga, data):
+    dados = buscar_jogos_por_dia(slug, data)
     jogos = []
 
     for evento in dados.get("events", []):
@@ -358,22 +373,26 @@ def buscar_jogos(slug, dias):
         for competidor in competidores:
             if competidor.get("homeAway") == "home":
                 mandante = competidor
-            elif competidor.get("homeAway") == "away":
+
+            if competidor.get("homeAway") == "away":
                 visitante = competidor
 
         if not mandante or not visitante:
             continue
 
-        data_jogo = competicao.get("date") or evento.get("date")
+        data_jogo = (
+            competicao.get("date")
+            or evento.get("date")
+        )
 
         if not data_jogo:
             continue
 
-        data_convertida = datetime.fromisoformat(
+        data_utc = datetime.fromisoformat(
             data_jogo.replace("Z", "+00:00")
         )
 
-        data_local = data_convertida.astimezone()
+        data_local = data_utc.astimezone(FUSO)
 
         status = (
             competicao
@@ -382,72 +401,91 @@ def buscar_jogos(slug, dias):
             .get("description", "Sem informação")
         )
 
+        nome_mandante = (
+            mandante.get("team", {})
+            .get("displayName", "Mandante")
+        )
+
+        nome_visitante = (
+            visitante.get("team", {})
+            .get("displayName", "Visitante")
+        )
+
         jogos.append({
             "id": str(evento.get("id", "")),
             "data": data_local,
-            "mandante": mandante.get("team", {}).get(
-                "displayName",
-                "Mandante",
-            ),
-            "visitante": visitante.get("team", {}).get(
-                "displayName",
-                "Visitante",
-            ),
+            "mandante": nome_mandante,
+            "visitante": nome_visitante,
+            "liga": nome_liga,
             "status": status,
-            "local": competicao.get("venue", {}).get(
-                "fullName",
-                "Local não informado",
+            "local": (
+                competicao.get("venue", {})
+                .get("fullName", "Local não informado")
             ),
         })
-
-    jogos.sort(key=lambda jogo: jogo["data"])
 
     return jogos
 
 
-def carregar_todos_jogos(ligas, dias):
-    todos = []
+def buscar_todos_jogos(ligas, quantidade_dias):
+    agora = datetime.now(FUSO)
+    jogos = []
     erros = []
 
-    for liga in ligas:
-        slug = LIGAS[liga]
+    for nome_liga in ligas:
+        slug = LIGAS[nome_liga]
 
-        try:
-            jogos = buscar_jogos(slug, dias)
+        for numero_dia in range(quantidade_dias):
+            data = (
+                agora + timedelta(days=numero_dia)
+            ).strftime("%Y%m%d")
 
-            for jogo in jogos:
-                jogo["liga"] = liga
+            try:
+                jogos_dia = extrair_jogos(
+                    slug,
+                    nome_liga,
+                    data,
+                )
 
-            todos.extend(jogos)
+                for jogo in jogos_dia:
+                    if jogo["data"] >= agora:
+                        jogos.append(jogo)
 
-        except Exception as erro:
-            erros.append(f"{liga}: {erro}")
+            except Exception as erro:
+                erros.append(
+                    f"{nome_liga} - {data}: {erro}"
+                )
 
-    vistos = set()
-    resultado = []
+    jogos.sort(key=lambda jogo: jogo["data"])
 
-    for jogo in todos:
+    jogos_unicos = []
+    ids_vistos = set()
+
+    for jogo in jogos:
         chave = jogo["id"]
 
-        if chave in vistos:
+        if chave in ids_vistos:
             continue
 
-        vistos.add(chave)
-        resultado.append(jogo)
+        ids_vistos.add(chave)
+        jogos_unicos.append(jogo)
 
-    resultado.sort(key=lambda jogo: jogo["data"])
-
-    return resultado, erros
+    return jogos_unicos, erros
 
 
 # ============================================================
-# EXIBIÇÃO DA PREVISÃO
+# EXIBIÇÃO DAS POSSIBILIDADES
 # ============================================================
 
 def mostrar_previsao(mandante, visitante):
-    previsao = calcular_previsao(mandante, visitante)
+    previsao = calcular_previsao(
+        mandante,
+        visitante,
+    )
 
-    st.subheader(f"{mandante} x {visitante}")
+    st.subheader(
+        f"{mandante} x {visitante}"
+    )
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -458,12 +496,12 @@ def mostrar_previsao(mandante, visitante):
 
     col2.metric(
         "Gols do mandante",
-        f"{previsao['gols_mandante']:.2f}",
+        f"{previsao['gols_casa']:.2f}",
     )
 
     col3.metric(
         "Gols do visitante",
-        f"{previsao['gols_visitante']:.2f}",
+        f"{previsao['gols_fora']:.2f}",
     )
 
     col4.metric(
@@ -515,9 +553,9 @@ def mostrar_previsao(mandante, visitante):
 
     for item in previsao["placares"]:
         tabela_placares.append({
-            "Placar": item["placar"],
+            "Placar": item["Placar"],
             "Probabilidade": porcentagem(
-                item["probabilidade"]
+                item["Probabilidade"]
             ),
         })
 
@@ -536,7 +574,9 @@ def mostrar_previsao(mandante, visitante):
     ].items():
         tabela_escanteios.append({
             "Mercado": f"Mais de {linha} escanteios",
-            "Probabilidade": porcentagem(probabilidade),
+            "Probabilidade": porcentagem(
+                probabilidade
+            ),
         })
 
     st.dataframe(
@@ -546,13 +586,13 @@ def mostrar_previsao(mandante, visitante):
     )
 
     st.warning(
-        "Estas são estimativas estatísticas. "
-        "Não há garantia de acerto."
+        "A previsão é estatística e não garante "
+        "o resultado real."
     )
 
 
 # ============================================================
-# INTERFACE PRINCIPAL
+# INTERFACE
 # ============================================================
 
 st.title("⚽ Previsor de Futebol")
@@ -563,16 +603,16 @@ st.caption(
 st.sidebar.header("Filtros dos jogos")
 
 periodo = st.sidebar.selectbox(
-    "Mostrar jogos dos próximos:",
-    {
-        "2 dias": 2,
-        "7 dias": 7,
-        "15 dias": 15,
-        "30 dias": 30,
-    }.keys(),
+    "Buscar jogos dos próximos:",
+    [
+        "2 dias",
+        "7 dias",
+        "15 dias",
+        "30 dias",
+    ],
 )
 
-quantidade_dias = {
+dias = {
     "2 dias": 2,
     "7 dias": 7,
     "15 dias": 15,
@@ -591,7 +631,7 @@ ligas_selecionadas = st.sidebar.multiselect(
 )
 
 buscar = st.sidebar.button(
-    "🔎 Buscar lista de jogos",
+    "🔎 Buscar jogos",
     type="primary",
     use_container_width=True,
 )
@@ -605,12 +645,17 @@ if "erros" not in st.session_state:
 
 if buscar:
     if not ligas_selecionadas:
-        st.error("Escolha pelo menos uma liga.")
+        st.error(
+            "Selecione pelo menos uma liga."
+        )
+
     else:
-        with st.spinner("Buscando jogos na ESPN..."):
-            jogos, erros = carregar_todos_jogos(
+        with st.spinner(
+            "Buscando jogos na ESPN..."
+        ):
+            jogos, erros = buscar_todos_jogos(
                 ligas_selecionadas,
-                quantidade_dias,
+                dias,
             )
 
         st.session_state.jogos = jogos
@@ -629,18 +674,23 @@ st.header("Lista de jogos")
 
 if not jogos:
     st.info(
-        "Escolha as ligas na barra lateral e clique em "
-        "'Buscar lista de jogos'."
+        "Selecione as ligas na barra lateral "
+        "e clique em 'Buscar jogos'."
     )
+
 else:
     opcoes = []
 
     for indice, jogo in enumerate(jogos):
-        horario = jogo["data"].strftime("%d/%m/%Y às %H:%M")
+        horario = jogo["data"].strftime(
+            "%d/%m/%Y às %H:%M"
+        )
 
         opcoes.append(
-            f"{horario} | {jogo['mandante']} x "
-            f"{jogo['visitante']} | {jogo['liga']}"
+            f"{horario} | "
+            f"{jogo['mandante']} x "
+            f"{jogo['visitante']} | "
+            f"{jogo['liga']}"
         )
 
     indice_escolhido = st.selectbox(
@@ -649,41 +699,39 @@ else:
         format_func=lambda indice: opcoes[indice],
     )
 
-    jogo_escolhido = jogos[indice_escolhido]
+    jogo = jogos[indice_escolhido]
 
     col1, col2, col3 = st.columns(3)
 
     col1.metric(
         "Data e horário",
-        jogo_escolhido["data"].strftime(
+        jogo["data"].strftime(
             "%d/%m/%Y %H:%M"
         ),
     )
 
     col2.metric(
         "Competição",
-        jogo_escolhido["liga"],
+        jogo["liga"],
     )
 
     col3.metric(
         "Status",
-        jogo_escolhido["status"],
+        jogo["status"],
     )
 
     st.write(
-        f"**Local:** {jogo_escolhido['local']}"
+        f"**Local:** {jogo['local']}"
     )
 
-    calcular_jogo = st.button(
+    if st.button(
         "📊 Ver possibilidades estatísticas",
         type="primary",
         use_container_width=True,
-    )
-
-    if calcular_jogo:
+    ):
         mostrar_previsao(
-            jogo_escolhido["mandante"],
-            jogo_escolhido["visitante"],
+            jogo["mandante"],
+            jogo["visitante"],
         )
 
 
@@ -709,8 +757,14 @@ if st.button(
     "Calcular previsão manual",
     use_container_width=True,
 ):
-    if not mandante_manual.strip() or not visitante_manual.strip():
-        st.error("Digite os dois times.")
+    if (
+        not mandante_manual.strip()
+        or not visitante_manual.strip()
+    ):
+        st.error(
+            "Digite os dois times."
+        )
+
     else:
         mostrar_previsao(
             mandante_manual,
