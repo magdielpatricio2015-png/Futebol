@@ -20,42 +20,37 @@ st.set_page_config(
 )
 
 FUSO = ZoneInfo("America/Sao_Paulo")
-ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+FUSO_UTC = ZoneInfo("UTC")
 
-# Header de navegador real. O User-Agent genérico anterior
-# ("Mozilla/5.0 Previsor Futebol") pode ser rejeitado pela proteção
-# anti-bot da ESPN, principalmente em servidores de nuvem (Streamlit Cloud,
-# Render, etc.), fazendo a busca falhar silenciosamente.
-HEADERS_ESPN = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
-    "Referer": "https://www.espn.com/",
-}
+# TheSportsDB oferece uma chave PÚBLICA de testes ("3"), sem necessidade
+# de cadastro nenhum — é a mesma usada por qualquer pessoa no mundo.
+# Por ser compartilhada, o limite de 30 requisições/minuto é global, não
+# individual, então pode falhar ocasionalmente em horários de pico —
+# nesse caso, basta tentar buscar de novo em alguns segundos.
+THESPORTSDB_BASE = "https://www.thesportsdb.com/api/v1/json/3"
 
-
-LIGAS = {
-    "Brasil - Série A": "bra.1",
-    "Brasil - Série B": "bra.2",
-    "Libertadores": "conmebol.libertadores",
-    "Sul-Americana": "conmebol.sudamericana",
-    "Premier League": "eng.1",
-    "Champions League": "uefa.champions",
-    "Europa League": "uefa.europa",
-    "Conference League": "uefa.europa.conf",
-    "La Liga": "esp.1",
-    "Serie A Italiana": "ita.1",
-    "Bundesliga": "ger.1",
-    "Ligue 1": "fra.1",
-    "Primeira Liga": "por.1",
-    "Eredivisie": "ned.1",
-    "MLS": "usa.1",
-    "Liga MX": "mex.1",
-    "Liga Saudita": "ksa.1",
+# Não uso IDs numéricos fixos (que mudam e são fáceis de errar sem poder
+# confirmar). Em vez disso, o app baixa a lista completa de ligas de
+# futebol da TheSportsDB e localiza o ID certo pelo nome, usando estes
+# termos de busca em inglês (idioma da base de dados).
+LIGAS_BUSCA = {
+    "Brasil - Série A": ["brazilian serie a"],
+    "Brasil - Série B": ["brazilian serie b"],
+    "Libertadores": ["copa libertadores"],
+    "Sul-Americana": ["copa sudamericana"],
+    "Premier League": ["english premier league"],
+    "Champions League": ["uefa champions league"],
+    "Europa League": ["uefa europa league"],
+    "Conference League": ["uefa europa conference league"],
+    "La Liga": ["spanish la liga"],
+    "Serie A Italiana": ["italian serie a"],
+    "Bundesliga": ["german bundesliga"],
+    "Ligue 1": ["french ligue 1"],
+    "Primeira Liga": ["portuguese primeira liga"],
+    "Eredivisie": ["dutch eredivisie"],
+    "MLS": ["american major league soccer"],
+    "Liga MX": ["mexican liga mx", "mexican primera division"],
+    "Liga Saudita": ["saudi professional league", "saudi arabian league"],
 }
 
 
@@ -340,30 +335,62 @@ def calcular_previsao(mandante, visitante):
 
 
 # ============================================================
-# BUSCA DA ESPN
+# BUSCA NA THESPORTSDB (sem cadastro)
 # ============================================================
 
-@st.cache_data(ttl=900, show_spinner=False)
-def buscar_jogos_intervalo(slug, data_inicio, data_fim):
-    """
-    Busca todos os jogos de uma liga num intervalo de datas com
-    UMA ÚNICA requisição (dates=inicio-fim), em vez de uma
-    requisição por dia. Isso evita dezenas/centenas de chamadas
-    sequenciais que podiam travar o app ou levar a ESPN a
-    bloquear as requisições.
-    """
-    url = f"{ESPN_BASE}/{slug}/scoreboard"
+@st.cache_data(ttl=604800, show_spinner=False)  # 7 dias — a lista de ligas quase não muda
+def obter_todas_ligas_futebol():
+    resposta = requests.get(
+        f"{THESPORTSDB_BASE}/all_leagues.php",
+        timeout=20,
+    )
 
-    parametros = {
-        "dates": f"{data_inicio}-{data_fim}",
-        "limit": 300,
+    resposta.raise_for_status()
+    dados = resposta.json()
+    ligas = dados.get("leagues") or []
+
+    return [liga for liga in ligas if liga.get("strSport") == "Soccer"]
+
+
+def resolver_id_liga(nome_liga, todas_ligas):
+    termos_busca = LIGAS_BUSCA[nome_liga]
+
+    nomes_normalizados = {
+        normalizar(liga["strLeague"]): liga["idLeague"]
+        for liga in todas_ligas
+        if liga.get("strLeague")
     }
 
+    for termo in termos_busca:
+        termo_normalizado = normalizar(termo)
+
+        if termo_normalizado in nomes_normalizados:
+            return nomes_normalizados[termo_normalizado]
+
+        semelhantes = get_close_matches(
+            termo_normalizado,
+            nomes_normalizados.keys(),
+            n=1,
+            cutoff=0.6,
+        )
+
+        if semelhantes:
+            return nomes_normalizados[semelhantes[0]]
+
+    return None
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def buscar_proximos_jogos_liga(league_id):
+    """
+    A TheSportsDB (chave gratuita) retorna os próximos ~15 jogos de uma
+    liga, sem filtro de data — filtramos localmente pelo período
+    escolhido depois de baixar.
+    """
     resposta = requests.get(
-        url,
-        params=parametros,
+        f"{THESPORTSDB_BASE}/eventsnextleague.php",
+        params={"id": league_id},
         timeout=20,
-        headers=HEADERS_ESPN,
     )
 
     resposta.raise_for_status()
@@ -371,74 +398,53 @@ def buscar_jogos_intervalo(slug, data_inicio, data_fim):
     return resposta.json()
 
 
-def extrair_jogos(slug, nome_liga, data_inicio, data_fim):
-    dados = buscar_jogos_intervalo(slug, data_inicio, data_fim)
+def extrair_jogos(league_id, nome_liga):
+    dados = buscar_proximos_jogos_liga(league_id)
+    eventos = dados.get("events") or []
+
     jogos = []
 
-    for evento in dados.get("events", []):
-        competicoes = evento.get("competitions", [])
+    for evento in eventos:
+        data_utc = None
+        timestamp = evento.get("strTimestamp")
 
-        if not competicoes:
-            continue
+        if timestamp:
+            try:
+                data_utc = datetime.fromisoformat(
+                    timestamp.replace("Z", "+00:00")
+                )
 
-        competicao = competicoes[0]
-        competidores = competicao.get("competitors", [])
+                if data_utc.tzinfo is None:
+                    data_utc = data_utc.replace(tzinfo=FUSO_UTC)
 
-        mandante = None
-        visitante = None
+            except ValueError:
+                data_utc = None
 
-        for competidor in competidores:
-            if competidor.get("homeAway") == "home":
-                mandante = competidor
+        if data_utc is None:
+            data_evento = evento.get("dateEvent")
+            hora_evento = evento.get("strTime") or "00:00:00"
 
-            if competidor.get("homeAway") == "away":
-                visitante = competidor
+            if not data_evento:
+                continue
 
-        if not mandante or not visitante:
-            continue
+            try:
+                data_utc = datetime.fromisoformat(
+                    f"{data_evento}T{hora_evento}"
+                ).replace(tzinfo=FUSO_UTC)
 
-        data_jogo = (
-            competicao.get("date")
-            or evento.get("date")
-        )
-
-        if not data_jogo:
-            continue
-
-        data_utc = datetime.fromisoformat(
-            data_jogo.replace("Z", "+00:00")
-        )
+            except ValueError:
+                continue
 
         data_local = data_utc.astimezone(FUSO)
 
-        status = (
-            competicao
-            .get("status", {})
-            .get("type", {})
-            .get("description", "Sem informação")
-        )
-
-        nome_mandante = (
-            mandante.get("team", {})
-            .get("displayName", "Mandante")
-        )
-
-        nome_visitante = (
-            visitante.get("team", {})
-            .get("displayName", "Visitante")
-        )
-
         jogos.append({
-            "id": str(evento.get("id", "")),
+            "id": str(evento.get("idEvent", "")),
             "data": data_local,
-            "mandante": nome_mandante,
-            "visitante": nome_visitante,
+            "mandante": evento.get("strHomeTeam", "Mandante"),
+            "visitante": evento.get("strAwayTeam", "Visitante"),
             "liga": nome_liga,
-            "status": status,
-            "local": (
-                competicao.get("venue", {})
-                .get("fullName", "Local não informado")
-            ),
+            "status": evento.get("strStatus") or "Agendado",
+            "local": evento.get("strVenue") or "Local não informado",
         })
 
     return jogos
@@ -446,39 +452,48 @@ def extrair_jogos(slug, nome_liga, data_inicio, data_fim):
 
 def buscar_todos_jogos(ligas, quantidade_dias):
     agora = datetime.now(FUSO)
-    data_inicio = agora.strftime("%Y%m%d")
-    data_fim = (agora + timedelta(days=quantidade_dias)).strftime("%Y%m%d")
+    limite = agora + timedelta(days=quantidade_dias)
 
     jogos = []
     erros = []
 
-    for nome_liga in ligas:
-        slug = LIGAS[nome_liga]
+    try:
+        todas_ligas = obter_todas_ligas_futebol()
+    except Exception as erro:
+        return [], [f"Não foi possível carregar a lista de ligas da TheSportsDB: {erro}"]
 
+    for nome_liga in ligas:
         try:
-            jogos_liga = extrair_jogos(
-                slug,
-                nome_liga,
-                data_inicio,
-                data_fim,
-            )
+            league_id = resolver_id_liga(nome_liga, todas_ligas)
+
+            if not league_id:
+                erros.append(
+                    f"{nome_liga}: não foi possível localizar essa liga "
+                    f"na base da TheSportsDB."
+                )
+                continue
+
+            jogos_liga = extrair_jogos(league_id, nome_liga)
 
             for jogo in jogos_liga:
-                if jogo["data"] >= agora:
+                if agora <= jogo["data"] <= limite:
                     jogos.append(jogo)
 
         except requests.exceptions.HTTPError as erro:
             codigo = erro.response.status_code if erro.response is not None else "?"
-            erros.append(
-                f"{nome_liga}: a ESPN respondeu com erro HTTP {codigo}. "
-                f"Isso costuma indicar bloqueio por excesso de requisições "
-                f"ou por vir de um servidor de nuvem."
-            )
+
+            if codigo == 429:
+                erros.append(
+                    f"{nome_liga}: limite de requisições por minuto atingido "
+                    f"(HTTP 429). Espere alguns segundos e tente de novo — "
+                    f"esse limite é compartilhado por todos que usam a "
+                    f"chave pública."
+                )
+            else:
+                erros.append(f"{nome_liga}: erro HTTP {codigo}.")
 
         except requests.exceptions.Timeout:
-            erros.append(
-                f"{nome_liga}: a requisição excedeu o tempo limite (20s)."
-            )
+            erros.append(f"{nome_liga}: a requisição excedeu o tempo limite.")
 
         except requests.exceptions.RequestException as erro:
             erros.append(f"{nome_liga}: falha de conexão ({erro}).")
@@ -651,7 +666,7 @@ dias = {
 
 ligas_selecionadas = st.sidebar.multiselect(
     "Escolha as ligas:",
-    list(LIGAS.keys()),
+    list(LIGAS_BUSCA.keys()),
     default=[
         "Brasil - Série A",
         "Libertadores",
@@ -660,53 +675,59 @@ ligas_selecionadas = st.sidebar.multiselect(
     ],
 )
 
+st.sidebar.caption(
+    "⚠️ A fonte gratuita (TheSportsDB) retorna só os próximos ~15 jogos "
+    "de cada liga. Em ligas muito movimentadas, buscar '30 dias' pode "
+    "não trazer tudo que existe nesse intervalo — apenas os jogos mais "
+    "próximos já cobrem a maior parte dos casos."
+)
+
 buscar = st.sidebar.button(
     "🔎 Buscar jogos",
     type="primary",
     use_container_width=True,
 )
 
-with st.sidebar.expander("🔧 Diagnóstico de conexão"):
+with st.sidebar.expander("🔧 Diagnóstico"):
     st.caption(
-        "Se a busca continuar sem trazer jogos, use este botão para "
-        "testar a conexão direta com a ESPN e ver a resposta bruta."
+        "Testa se a TheSportsDB está respondendo e mostra qual ID de "
+        "liga foi encontrado para o nome escolhido."
     )
 
     liga_teste = st.selectbox(
         "Liga para testar:",
-        list(LIGAS.keys()),
+        list(LIGAS_BUSCA.keys()),
         key="liga_teste",
     )
 
     if st.button("Testar conexão agora"):
-        slug_teste = LIGAS[liga_teste]
-        url_teste = f"{ESPN_BASE}/{slug_teste}/scoreboard"
-
         try:
-            resposta_teste = requests.get(
-                url_teste,
-                params={"limit": 20},
-                timeout=20,
-                headers=HEADERS_ESPN,
-            )
+            todas_ligas_teste = obter_todas_ligas_futebol()
+            league_id_teste = resolver_id_liga(liga_teste, todas_ligas_teste)
 
-            st.write(f"URL: {url_teste}")
-            st.write(f"Status HTTP: {resposta_teste.status_code}")
-
-            if resposta_teste.ok:
-                quantidade_eventos = len(
-                    resposta_teste.json().get("events", [])
-                )
-                st.success(
-                    f"Conexão OK. {quantidade_eventos} evento(s) "
-                    f"encontrados sem filtro de data."
+            if not league_id_teste:
+                st.error(
+                    "Não encontrei essa liga na base da TheSportsDB "
+                    "(pode ter mudado de nome)."
                 )
             else:
-                st.error(
-                    f"A ESPN recusou a requisição "
-                    f"(HTTP {resposta_teste.status_code}). "
-                    f"Trecho da resposta: {resposta_teste.text[:300]}"
+                resposta_teste = requests.get(
+                    f"{THESPORTSDB_BASE}/eventsnextleague.php",
+                    params={"id": league_id_teste},
+                    timeout=15,
                 )
+
+                st.write(f"ID encontrado: {league_id_teste}")
+                st.write(f"Status HTTP: {resposta_teste.status_code}")
+
+                if resposta_teste.ok:
+                    eventos = resposta_teste.json().get("events") or []
+                    st.success(
+                        f"Conexão OK. {len(eventos)} jogo(s) futuro(s) "
+                        f"encontrados para essa liga."
+                    )
+                else:
+                    st.error(f"Resposta: {resposta_teste.text[:300]}")
 
         except Exception as erro:
             st.error(f"Falha ao conectar: {erro}")
@@ -729,7 +750,7 @@ if buscar:
 
     else:
         with st.spinner(
-            "Buscando jogos na ESPN..."
+            "Buscando jogos..."
         ):
             jogos, erros = buscar_todos_jogos(
                 ligas_selecionadas,
@@ -743,7 +764,7 @@ if buscar:
 
 if st.session_state.erros:
     st.error(
-        f"⚠️ {len(st.session_state.erros)} liga(s) falharam na busca. "
+        f"⚠️ {len(st.session_state.erros)} liga(s) tiveram problema na busca. "
         f"Veja os detalhes abaixo."
     )
 
@@ -760,10 +781,7 @@ if not jogos:
     if st.session_state.ja_buscou:
         st.warning(
             "A busca foi feita, mas nenhum jogo foi encontrado para "
-            "as ligas e o período selecionados. Isso pode significar "
-            "que não há partidas marcadas nesse intervalo, ou que a "
-            "ESPN recusou a requisição — use o diagnóstico de conexão "
-            "na barra lateral para verificar."
+            "as ligas e o período selecionados."
         )
     else:
         st.info(
