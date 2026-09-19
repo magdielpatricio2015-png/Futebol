@@ -22,6 +22,21 @@ st.set_page_config(
 FUSO = ZoneInfo("America/Sao_Paulo")
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 
+# Header de navegador real. O User-Agent genérico anterior
+# ("Mozilla/5.0 Previsor Futebol") pode ser rejeitado pela proteção
+# anti-bot da ESPN, principalmente em servidores de nuvem (Streamlit Cloud,
+# Render, etc.), fazendo a busca falhar silenciosamente.
+HEADERS_ESPN = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
+    "Referer": "https://www.espn.com/",
+}
+
 
 LIGAS = {
     "Brasil - Série A": "bra.1",
@@ -328,25 +343,27 @@ def calcular_previsao(mandante, visitante):
 # BUSCA DA ESPN
 # ============================================================
 
-@st.cache_data(ttl=900)
-def buscar_jogos_por_dia(slug, data):
+@st.cache_data(ttl=900, show_spinner=False)
+def buscar_jogos_intervalo(slug, data_inicio, data_fim):
+    """
+    Busca todos os jogos de uma liga num intervalo de datas com
+    UMA ÚNICA requisição (dates=inicio-fim), em vez de uma
+    requisição por dia. Isso evita dezenas/centenas de chamadas
+    sequenciais que podiam travar o app ou levar a ESPN a
+    bloquear as requisições.
+    """
     url = f"{ESPN_BASE}/{slug}/scoreboard"
 
     parametros = {
-        "dates": data,
-        "limit": 100,
-        "region": "br",
-        "lang": "pt",
+        "dates": f"{data_inicio}-{data_fim}",
+        "limit": 300,
     }
 
     resposta = requests.get(
         url,
         params=parametros,
         timeout=20,
-        headers={
-            "User-Agent": "Mozilla/5.0 Previsor Futebol",
-            "Accept": "application/json",
-        },
+        headers=HEADERS_ESPN,
     )
 
     resposta.raise_for_status()
@@ -354,8 +371,8 @@ def buscar_jogos_por_dia(slug, data):
     return resposta.json()
 
 
-def extrair_jogos(slug, nome_liga, data):
-    dados = buscar_jogos_por_dia(slug, data)
+def extrair_jogos(slug, nome_liga, data_inicio, data_fim):
+    dados = buscar_jogos_intervalo(slug, data_inicio, data_fim)
     jogos = []
 
     for evento in dados.get("events", []):
@@ -429,32 +446,45 @@ def extrair_jogos(slug, nome_liga, data):
 
 def buscar_todos_jogos(ligas, quantidade_dias):
     agora = datetime.now(FUSO)
+    data_inicio = agora.strftime("%Y%m%d")
+    data_fim = (agora + timedelta(days=quantidade_dias)).strftime("%Y%m%d")
+
     jogos = []
     erros = []
 
     for nome_liga in ligas:
         slug = LIGAS[nome_liga]
 
-        for numero_dia in range(quantidade_dias):
-            data = (
-                agora + timedelta(days=numero_dia)
-            ).strftime("%Y%m%d")
+        try:
+            jogos_liga = extrair_jogos(
+                slug,
+                nome_liga,
+                data_inicio,
+                data_fim,
+            )
 
-            try:
-                jogos_dia = extrair_jogos(
-                    slug,
-                    nome_liga,
-                    data,
-                )
+            for jogo in jogos_liga:
+                if jogo["data"] >= agora:
+                    jogos.append(jogo)
 
-                for jogo in jogos_dia:
-                    if jogo["data"] >= agora:
-                        jogos.append(jogo)
+        except requests.exceptions.HTTPError as erro:
+            codigo = erro.response.status_code if erro.response is not None else "?"
+            erros.append(
+                f"{nome_liga}: a ESPN respondeu com erro HTTP {codigo}. "
+                f"Isso costuma indicar bloqueio por excesso de requisições "
+                f"ou por vir de um servidor de nuvem."
+            )
 
-            except Exception as erro:
-                erros.append(
-                    f"{nome_liga} - {data}: {erro}"
-                )
+        except requests.exceptions.Timeout:
+            erros.append(
+                f"{nome_liga}: a requisição excedeu o tempo limite (20s)."
+            )
+
+        except requests.exceptions.RequestException as erro:
+            erros.append(f"{nome_liga}: falha de conexão ({erro}).")
+
+        except Exception as erro:
+            erros.append(f"{nome_liga}: erro inesperado ({erro}).")
 
     jogos.sort(key=lambda jogo: jogo["data"])
 
@@ -636,11 +666,59 @@ buscar = st.sidebar.button(
     use_container_width=True,
 )
 
+with st.sidebar.expander("🔧 Diagnóstico de conexão"):
+    st.caption(
+        "Se a busca continuar sem trazer jogos, use este botão para "
+        "testar a conexão direta com a ESPN e ver a resposta bruta."
+    )
+
+    liga_teste = st.selectbox(
+        "Liga para testar:",
+        list(LIGAS.keys()),
+        key="liga_teste",
+    )
+
+    if st.button("Testar conexão agora"):
+        slug_teste = LIGAS[liga_teste]
+        url_teste = f"{ESPN_BASE}/{slug_teste}/scoreboard"
+
+        try:
+            resposta_teste = requests.get(
+                url_teste,
+                params={"limit": 20},
+                timeout=20,
+                headers=HEADERS_ESPN,
+            )
+
+            st.write(f"URL: {url_teste}")
+            st.write(f"Status HTTP: {resposta_teste.status_code}")
+
+            if resposta_teste.ok:
+                quantidade_eventos = len(
+                    resposta_teste.json().get("events", [])
+                )
+                st.success(
+                    f"Conexão OK. {quantidade_eventos} evento(s) "
+                    f"encontrados sem filtro de data."
+                )
+            else:
+                st.error(
+                    f"A ESPN recusou a requisição "
+                    f"(HTTP {resposta_teste.status_code}). "
+                    f"Trecho da resposta: {resposta_teste.text[:300]}"
+                )
+
+        except Exception as erro:
+            st.error(f"Falha ao conectar: {erro}")
+
 if "jogos" not in st.session_state:
     st.session_state.jogos = []
 
 if "erros" not in st.session_state:
     st.session_state.erros = []
+
+if "ja_buscou" not in st.session_state:
+    st.session_state.ja_buscou = False
 
 
 if buscar:
@@ -660,10 +738,16 @@ if buscar:
 
         st.session_state.jogos = jogos
         st.session_state.erros = erros
+        st.session_state.ja_buscou = True
 
 
 if st.session_state.erros:
-    with st.expander("Avisos da busca"):
+    st.error(
+        f"⚠️ {len(st.session_state.erros)} liga(s) falharam na busca. "
+        f"Veja os detalhes abaixo."
+    )
+
+    with st.expander("Avisos da busca", expanded=True):
         for erro in st.session_state.erros:
             st.warning(erro)
 
@@ -673,10 +757,19 @@ jogos = st.session_state.jogos
 st.header("Lista de jogos")
 
 if not jogos:
-    st.info(
-        "Selecione as ligas na barra lateral "
-        "e clique em 'Buscar jogos'."
-    )
+    if st.session_state.ja_buscou:
+        st.warning(
+            "A busca foi feita, mas nenhum jogo foi encontrado para "
+            "as ligas e o período selecionados. Isso pode significar "
+            "que não há partidas marcadas nesse intervalo, ou que a "
+            "ESPN recusou a requisição — use o diagnóstico de conexão "
+            "na barra lateral para verificar."
+        )
+    else:
+        st.info(
+            "Selecione as ligas na barra lateral "
+            "e clique em 'Buscar jogos'."
+        )
 
 else:
     opcoes = []
